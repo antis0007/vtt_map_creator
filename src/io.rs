@@ -125,7 +125,11 @@ fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
         MaterialKind::Gravel => {
             let pebble = hash2((p[0] * 5.0) as i32, (p[1] * 5.0) as i32, 9);
             let c = tint([118.0, 118.0, 114.0], 0.82 + n1 * 0.08);
-            [c[0] + pebble * 18.0, c[1] + pebble * 18.0, c[2] + pebble * 18.0]
+            [
+                c[0] + pebble * 18.0,
+                c[1] + pebble * 18.0,
+                c[2] + pebble * 18.0,
+            ]
         }
         MaterialKind::Brick => {
             let mortar = brick_mortar(p);
@@ -150,7 +154,11 @@ fn fbm(mut x: f32, mut y: f32, octaves: usize) -> f32 {
         y *= 2.03;
         amp *= 0.5;
     }
-    if norm > 0.0 { sum / norm } else { 0.0 }
+    if norm > 0.0 {
+        sum / norm
+    } else {
+        0.0
+    }
 }
 
 fn noise2(x: f32, y: f32) -> f32 {
@@ -172,9 +180,8 @@ fn noise2(x: f32, y: f32) -> f32 {
 }
 
 fn hash2(x: i32, y: i32, seed: i32) -> f32 {
-    let mut n = x.wrapping_mul(374_761_393)
-        ^ y.wrapping_mul(668_265_263)
-        ^ seed.wrapping_mul(362_437);
+    let mut n =
+        x.wrapping_mul(374_761_393) ^ y.wrapping_mul(668_265_263) ^ seed.wrapping_mul(362_437);
     n = (n ^ (n >> 13)).wrapping_mul(1_274_126_177);
     ((n ^ (n >> 16)) as u32 & 0xffff) as f32 / 65535.0
 }
@@ -202,5 +209,9 @@ fn brick_mortar(p: [f32; 2]) -> f32 {
     let local_x = (p[0] + offset).fract();
     let local_y = p[1].fract();
     let mortar = (local_x.min(1.0 - local_x) < 0.06) || (local_y.min(1.0 - local_y) < 0.08);
-    if mortar { 1.0 } else { 0.0 }
+    if mortar {
+        1.0
+    } else {
+        0.0
+    }
 }

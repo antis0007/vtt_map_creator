@@ -14,6 +14,8 @@ pub struct AtlasForgeApp {
     material: MaterialKind,
     effect: EffectKind,
     brush_radius: u32,
+    blend_strength: f32,
+    grid_opacity: f32,
     selection: Selection,
     drag_anchor: Option<[u32; 2]>,
     drag_current: Option<[u32; 2]>,
@@ -44,7 +46,9 @@ impl AtlasForgeApp {
             tool: ToolKind::Brush,
             material: MaterialKind::Grass,
             effect: EffectKind::Wind,
-            brush_radius: 2,
+            brush_radius: 1,
+            blend_strength: 0.2,
+            grid_opacity: 0.08,
             selection: Selection::default(),
             drag_anchor: None,
             drag_current: None,
@@ -63,19 +67,23 @@ impl AtlasForgeApp {
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.label("Tool:");
+            ui.label(egui::RichText::new("Tools").strong());
             for tool in ToolKind::ALL {
                 ui.selectable_value(&mut self.tool, tool, tool.label());
             }
             ui.separator();
-            ui.label("Layer:");
+            ui.label(egui::RichText::new("Layer").strong());
             ui.selectable_value(&mut self.layer, EditLayer::Base, EditLayer::Base.label());
-            ui.selectable_value(&mut self.layer, EditLayer::Effect, EditLayer::Effect.label());
+            ui.selectable_value(
+                &mut self.layer,
+                EditLayer::Effect,
+                EditLayer::Effect.label(),
+            );
             ui.separator();
-            ui.label("Brush:");
-            ui.add(egui::Slider::new(&mut self.brush_radius, 1..=8));
+            ui.label("Brush Size");
+            ui.add(egui::Slider::new(&mut self.brush_radius, 1..=8).show_value(true));
             ui.separator();
-            ui.label("Zoom:");
+            ui.label("Zoom");
             ui.add(egui::Slider::new(&mut self.zoom, 1.0..=12.0).logarithmic(true));
             ui.separator();
             if ui.button("Reset View").clicked() {
@@ -85,30 +93,71 @@ impl AtlasForgeApp {
         });
     }
 
+    fn material_preview_color(material: MaterialKind) -> Color32 {
+        match material {
+            MaterialKind::Dirt => Color32::from_rgb(106, 75, 52),
+            MaterialKind::Grass => Color32::from_rgb(66, 120, 58),
+            MaterialKind::Sand => Color32::from_rgb(196, 176, 122),
+            MaterialKind::Water => Color32::from_rgb(43, 98, 145),
+            MaterialKind::Lava => Color32::from_rgb(176, 54, 24),
+            MaterialKind::Gravel => Color32::from_rgb(128, 128, 120),
+            MaterialKind::Brick => Color32::from_rgb(145, 70, 58),
+            MaterialKind::Path => Color32::from_rgb(137, 116, 88),
+        }
+    }
+
+    fn effect_preview_color(effect: EffectKind) -> Color32 {
+        match effect {
+            EffectKind::None => Color32::from_gray(70),
+            EffectKind::Wind => Color32::from_rgb(83, 136, 77),
+            EffectKind::Rain => Color32::from_rgb(78, 102, 148),
+        }
+    }
+
     fn side_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("controls")
             .resizable(true)
             .default_width(260.0)
             .show(ctx, |ui| {
-                ui.heading("Materials");
-                egui::ComboBox::from_id_salt("material_combo")
-                    .selected_text(self.material.label())
-                    .show_ui(ui, |ui| {
-                        for material in MaterialKind::ALL {
-                            ui.selectable_value(&mut self.material, material, material.label());
+                ui.heading("Palette");
+                ui.label("Terrain materials");
+                egui::Grid::new("material_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 8.0])
+                    .show(ui, |ui| {
+                        for (idx, material) in MaterialKind::ALL.into_iter().enumerate() {
+                            let text = egui::RichText::new(material.label())
+                                .color(Self::material_preview_color(material));
+                            ui.selectable_value(&mut self.material, material, text);
+                            if idx % 2 == 1 {
+                                ui.end_row();
+                            }
                         }
                     });
 
                 ui.separator();
-                ui.heading("Effect Brush");
-                egui::ComboBox::from_id_salt("effect_combo")
-                    .selected_text(self.effect.label())
-                    .show_ui(ui, |ui| {
-                        for effect in EffectKind::ALL {
-                            ui.selectable_value(&mut self.effect, effect, effect.label());
-                        }
-                    });
-                ui.label("Tip: set effect to None or use Erase on the Effects layer to remove FX.");
+                ui.label("Effects");
+                ui.horizontal_wrapped(|ui| {
+                    for effect in EffectKind::ALL {
+                        let text = egui::RichText::new(effect.label())
+                            .color(Self::effect_preview_color(effect));
+                        ui.selectable_value(&mut self.effect, effect, text);
+                    }
+                });
+                ui.label("Tip: paint on the Effects layer, or erase effects directly.");
+
+                ui.separator();
+                ui.heading("Render");
+                ui.add(
+                    egui::Slider::new(&mut self.blend_strength, 0.0..=0.48)
+                        .text("Tile Blend")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.grid_opacity, 0.0..=0.35)
+                        .text("Grid Overlay")
+                        .fixed_decimals(2),
+                );
 
                 ui.separator();
                 ui.heading("Selection");
@@ -190,14 +239,16 @@ impl AtlasForgeApp {
                 ui.label("• Brush/Erase: paint live while dragging");
                 ui.label("• Rect/Select: drag to define region");
                 ui.label("• Fill: click once");
+                ui.label("• Shortcuts: B/E/F/R/S tools, [ and ] brush size");
             });
     }
 
     fn preview_or_selection_bounds(&self) -> Option<([u32; 2], [u32; 2])> {
         match (self.drag_anchor, self.drag_current) {
-            (Some(a), Some(b)) if matches!(self.tool, ToolKind::Rect | ToolKind::Select) => {
-                Some(([a[0].min(b[0]), a[1].min(b[1])], [a[0].max(b[0]), a[1].max(b[1])]))
-            }
+            (Some(a), Some(b)) if matches!(self.tool, ToolKind::Rect | ToolKind::Select) => Some((
+                [a[0].min(b[0]), a[1].min(b[1])],
+                [a[0].max(b[0]), a[1].max(b[1])],
+            )),
             _ => self.selection.bounds(),
         }
     }
@@ -211,12 +262,10 @@ impl AtlasForgeApp {
 
     fn clamp_view(&mut self) {
         let view = self.view_size_tiles();
-        self.view_origin[0] = self
-            .view_origin[0]
-            .clamp(0.0, (self.doc.width as f32 - view[0]).max(0.0));
-        self.view_origin[1] = self
-            .view_origin[1]
-            .clamp(0.0, (self.doc.height as f32 - view[1]).max(0.0));
+        self.view_origin[0] =
+            self.view_origin[0].clamp(0.0, (self.doc.width as f32 - view[0]).max(0.0));
+        self.view_origin[1] =
+            self.view_origin[1].clamp(0.0, (self.doc.height as f32 - view[1]).max(0.0));
     }
 
     fn tile_from_pos(&self, image_rect: Rect, pos: Pos2) -> Option<[u32; 2]> {
@@ -250,8 +299,8 @@ impl AtlasForgeApp {
         )
     }
 
-    fn fit_aspect(&self, outer: Rect, target_px: [u32; 2]) -> Rect {
-        let aspect = target_px[0] as f32 / target_px[1] as f32;
+    fn fit_aspect(&self, outer: Rect, view_tiles: [f32; 2]) -> Rect {
+        let aspect = view_tiles[0] / view_tiles[1].max(0.0001);
         let outer_aspect = outer.width() / outer.height().max(1.0);
         if outer_aspect > aspect {
             let w = outer.height() * aspect;
@@ -265,10 +314,11 @@ impl AtlasForgeApp {
     }
 
     fn apply_brush(&mut self, tile: [u32; 2], erase: bool) {
+        let effective_radius = self.brush_radius.saturating_sub(1);
         if erase {
-            let r = self.brush_radius as i32;
+            let r = effective_radius as i32;
             let [cx, cy] = tile;
-            let rr = (self.brush_radius * self.brush_radius) as i32;
+            let rr = (effective_radius * effective_radius) as i32;
             for y in (cy as i32 - r).max(0)..=(cy as i32 + r).min(self.doc.height as i32 - 1) {
                 for x in (cx as i32 - r).max(0)..=(cx as i32 + r).min(self.doc.width as i32 - 1) {
                     let dx = x - cx as i32;
@@ -279,7 +329,13 @@ impl AtlasForgeApp {
                 }
             }
         } else {
-            self.doc.paint_disc(tile, self.brush_radius, self.layer, self.material, self.effect);
+            self.doc.paint_disc(
+                tile,
+                effective_radius,
+                self.layer,
+                self.material,
+                self.effect,
+            );
         }
         self.gpu_dirty = true;
     }
@@ -334,7 +390,8 @@ impl AtlasForgeApp {
         if let (Some(a), Some(b)) = (self.drag_anchor, self.drag_current) {
             match self.tool {
                 ToolKind::Rect => {
-                    self.doc.paint_rect(a, b, self.layer, self.material, self.effect);
+                    self.doc
+                        .paint_rect(a, b, self.layer, self.material, self.effect);
                     self.gpu_dirty = true;
                 }
                 ToolKind::Select => {
@@ -369,7 +426,7 @@ impl AtlasForgeApp {
     fn canvas(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let avail = ui.available_size();
         let (response, painter) = ui.allocate_painter(avail, Sense::click_and_drag());
-        let image_rect = self.fit_aspect(response.rect, self.renderer.target_px());
+        let image_rect = self.fit_aspect(response.rect, self.view_size_tiles());
 
         if response.hovered() {
             let scroll = ctx.input(|i| i.raw_scroll_delta.y);
@@ -398,7 +455,8 @@ impl AtlasForgeApp {
 
         let primary_pressed = ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
         let primary_down = ctx.input(|i| i.pointer.primary_down());
-        let primary_released = ctx.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
+        let primary_released =
+            ctx.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
 
         if primary_pressed && response.hovered() {
             self.begin_primary_action(hover_tile);
@@ -416,6 +474,8 @@ impl AtlasForgeApp {
             self.view_origin,
             self.view_size_tiles(),
             self.started_at.elapsed().as_secs_f32(),
+            self.blend_strength,
+            self.grid_opacity,
         );
         self.gpu_dirty = false;
 
@@ -447,7 +507,8 @@ impl AtlasForgeApp {
 
         if let Some(tile) = hover_tile {
             let min = self.world_to_screen(image_rect, [tile[0] as f32, tile[1] as f32]);
-            let max = self.world_to_screen(image_rect, [tile[0] as f32 + 1.0, tile[1] as f32 + 1.0]);
+            let max =
+                self.world_to_screen(image_rect, [tile[0] as f32 + 1.0, tile[1] as f32 + 1.0]);
             painter.rect_stroke(
                 Rect::from_min_max(min, max),
                 0.0,
@@ -463,10 +524,37 @@ impl AtlasForgeApp {
             );
         }
     }
+
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::B) {
+                self.tool = ToolKind::Brush;
+            }
+            if i.key_pressed(egui::Key::E) {
+                self.tool = ToolKind::Erase;
+            }
+            if i.key_pressed(egui::Key::F) {
+                self.tool = ToolKind::Fill;
+            }
+            if i.key_pressed(egui::Key::R) {
+                self.tool = ToolKind::Rect;
+            }
+            if i.key_pressed(egui::Key::S) {
+                self.tool = ToolKind::Select;
+            }
+            if i.key_pressed(egui::Key::OpenBracket) {
+                self.brush_radius = self.brush_radius.saturating_sub(1).max(1);
+            }
+            if i.key_pressed(egui::Key::CloseBracket) {
+                self.brush_radius = (self.brush_radius + 1).min(8);
+            }
+        });
+    }
 }
 
 impl eframe::App for AtlasForgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.shortcuts(ctx);
         self.clamp_view();
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar(ui));
         self.side_panel(ctx);

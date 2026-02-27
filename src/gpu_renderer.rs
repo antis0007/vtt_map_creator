@@ -12,8 +12,9 @@ struct Globals {
     view_origin: [f32; 2],
     view_size: [f32; 2],
     time: f32,
-    tile_px: f32,
-    _pad1: [u32; 2],
+    blend_strength: f32,
+    grid_opacity: f32,
+    _pad1: f32,
 }
 
 pub struct GpuMapRenderer {
@@ -28,7 +29,6 @@ pub struct GpuMapRenderer {
     _color_tex: wgpu::Texture,
     texture_id: egui::TextureId,
     doc_dims: [u32; 2],
-    target_px: [u32; 2],
 }
 
 impl GpuMapRenderer {
@@ -79,7 +79,8 @@ impl GpuMapRenderer {
             ],
         });
 
-        let bind_group = Self::make_bind_group(&device, &bind_group_layout, &globals_buffer, &tile_buffer);
+        let bind_group =
+            Self::make_bind_group(&device, &bind_group_layout, &globals_buffer, &tile_buffer);
         let shader = device.create_shader_module(wgpu::include_wgsl!("terrain_shader.wgsl"));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("map-pipeline-layout"),
@@ -114,10 +115,11 @@ impl GpuMapRenderer {
         });
 
         let (color_tex, color_view) = Self::create_target(&device, target_format, target_px);
-        let texture_id = render_state
-            .renderer
-            .write()
-            .register_native_texture(&device, &color_view, wgpu::FilterMode::Linear);
+        let texture_id = render_state.renderer.write().register_native_texture(
+            &device,
+            &color_view,
+            wgpu::FilterMode::Linear,
+        );
 
         let me = Self {
             device,
@@ -131,7 +133,6 @@ impl GpuMapRenderer {
             _color_tex: color_tex,
             texture_id,
             doc_dims,
-            target_px,
         };
         me.upload_tiles(doc);
         Ok(me)
@@ -141,10 +142,6 @@ impl GpuMapRenderer {
         self.texture_id
     }
 
-    pub fn target_px(&self) -> [u32; 2] {
-        self.target_px
-    }
-
     pub fn render(
         &mut self,
         doc: &MapDocument,
@@ -152,6 +149,8 @@ impl GpuMapRenderer {
         view_origin: [f32; 2],
         view_size: [f32; 2],
         time_seconds: f32,
+        blend_strength: f32,
+        grid_opacity: f32,
     ) {
         if doc.dims() != self.doc_dims {
             self.rebuild_tile_buffer(doc);
@@ -166,8 +165,9 @@ impl GpuMapRenderer {
             view_origin,
             view_size,
             time: time_seconds,
-            tile_px: doc.tile_px as f32,
-            _pad1: [0; 2],
+            blend_strength,
+            grid_opacity,
+            _pad1: 0.0,
         };
         self.queue
             .write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));

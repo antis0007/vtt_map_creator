@@ -87,7 +87,13 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    pub const ALL: [Self; 5] = [Self::Brush, Self::Fill, Self::Rect, Self::Select, Self::Erase];
+    pub const ALL: [Self; 5] = [
+        Self::Brush,
+        Self::Fill,
+        Self::Rect,
+        Self::Select,
+        Self::Erase,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -119,7 +125,10 @@ impl Selection {
     pub fn bounds(self) -> Option<([u32; 2], [u32; 2])> {
         let a = self.anchor?;
         let b = self.focus?;
-        Some(([a[0].min(b[0]), a[1].min(b[1])], [a[0].max(b[0]), a[1].max(b[1])]))
+        Some((
+            [a[0].min(b[0]), a[1].min(b[1])],
+            [a[0].max(b[0]), a[1].max(b[1])],
+        ))
     }
 }
 
