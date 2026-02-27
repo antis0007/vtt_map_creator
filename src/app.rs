@@ -103,6 +103,10 @@ impl AtlasForgeApp {
             MaterialKind::Gravel => Color32::from_rgb(128, 128, 120),
             MaterialKind::Brick => Color32::from_rgb(145, 70, 58),
             MaterialKind::Path => Color32::from_rgb(137, 116, 88),
+            MaterialKind::Wall => Color32::from_rgb(136, 144, 151),
+            MaterialKind::WallDoor => Color32::from_rgb(128, 92, 61),
+            MaterialKind::WallWindow => Color32::from_rgb(100, 124, 153),
+            MaterialKind::FloorWood => Color32::from_rgb(155, 117, 77),
         }
     }
 
@@ -153,6 +157,7 @@ impl AtlasForgeApp {
                         .text("Tile Blend")
                         .fixed_decimals(2),
                 );
+                ui.small("Blending is applied only to blend-enabled materials.");
                 ui.add(
                     egui::Slider::new(&mut self.grid_opacity, 0.0..=0.35)
                         .text("Grid Overlay")

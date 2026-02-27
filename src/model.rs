@@ -13,10 +13,14 @@ pub enum MaterialKind {
     Gravel = 5,
     Brick = 6,
     Path = 7,
+    Wall = 8,
+    WallDoor = 9,
+    WallWindow = 10,
+    FloorWood = 11,
 }
 
 impl MaterialKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 12] = [
         Self::Dirt,
         Self::Grass,
         Self::Sand,
@@ -25,6 +29,10 @@ impl MaterialKind {
         Self::Gravel,
         Self::Brick,
         Self::Path,
+        Self::Wall,
+        Self::WallDoor,
+        Self::WallWindow,
+        Self::FloorWood,
     ];
 
     pub fn label(self) -> &'static str {
@@ -37,7 +45,29 @@ impl MaterialKind {
             Self::Gravel => "Gravel",
             Self::Brick => "Brick",
             Self::Path => "Path",
+            Self::Wall => "Wall",
+            Self::WallDoor => "Wall Door",
+            Self::WallWindow => "Wall Window",
+            Self::FloorWood => "Wood Floor",
         }
+    }
+
+    pub fn blends(self) -> bool {
+        matches!(
+            self,
+            Self::Dirt
+                | Self::Grass
+                | Self::Sand
+                | Self::Water
+                | Self::Lava
+                | Self::Gravel
+                | Self::Path
+                | Self::Wall
+        )
+    }
+
+    pub fn diagonal_blend(self) -> bool {
+        matches!(self, Self::Path | Self::Wall)
     }
 }
 
