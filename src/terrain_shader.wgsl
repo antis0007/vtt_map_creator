@@ -38,12 +38,50 @@ fn unpack_effect(packed: u32) -> u32 {
     return (packed >> 8u) & 0xffu;
 }
 
+const MATERIAL_DIRT: u32 = 0u;
+const MATERIAL_GRASS: u32 = 1u;
+const MATERIAL_SAND: u32 = 2u;
+const MATERIAL_WATER: u32 = 3u;
+const MATERIAL_LAVA: u32 = 4u;
+const MATERIAL_GRAVEL: u32 = 5u;
+const MATERIAL_BRICK: u32 = 6u;
+const MATERIAL_PATH: u32 = 7u;
+const MATERIAL_WALL: u32 = 8u;
+const MATERIAL_WALL_DOOR: u32 = 9u;
+const MATERIAL_WALL_WINDOW: u32 = 10u;
+const MATERIAL_FLOOR_WOOD: u32 = 11u;
+const MATERIAL_SENTINEL: u32 = 255u;
+const EFFECT_SENTINEL: u32 = 255u;
+
 fn material_blends(material: u32) -> bool {
-    return material <= 5u || material == 7u || material == 8u;
+    return material <= MATERIAL_GRAVEL || material == MATERIAL_PATH || material == MATERIAL_WALL;
 }
 
 fn material_diagonal(material: u32) -> bool {
-    return material == 7u || material == 8u;
+    return material == MATERIAL_PATH || material == MATERIAL_WALL;
+}
+
+fn material_structural(material: u32) -> bool {
+    return material == MATERIAL_BRICK
+        || material == MATERIAL_WALL
+        || material == MATERIAL_WALL_DOOR
+        || material == MATERIAL_WALL_WINDOW
+        || material == MATERIAL_FLOOR_WOOD;
+}
+
+fn material_blend_compatible(base: u32, neighbor: u32) -> bool {
+    if (base == neighbor || !material_blends(base) || !material_blends(neighbor)) {
+        return false;
+    }
+    if ((base == MATERIAL_GRASS && material_structural(neighbor))
+        || (neighbor == MATERIAL_GRASS && material_structural(base))) {
+        return false;
+    }
+    return true;
+}
+
+fn in_bounds(p: vec2<i32>) -> bool {
+    return p.x >= 0 && p.y >= 0 && p.x < i32(g.map_size.x) && p.y < i32(g.map_size.y);
 }
 
 fn clamp_tile(p: vec2<i32>) -> vec2<u32> {
@@ -51,10 +89,19 @@ fn clamp_tile(p: vec2<i32>) -> vec2<u32> {
     return vec2<u32>(clamp(p, vec2<i32>(0, 0), max_xy));
 }
 
-fn tile_at(p: vec2<i32>) -> u32 {
+fn tile_at_clamped(p: vec2<i32>) -> u32 {
     let c = clamp_tile(p);
     let idx = c.y * g.map_size.x + c.x;
     return tiles[idx];
+}
+
+fn tile_at_or_sentinel(p: vec2<i32>) -> u32 {
+    if (in_bounds(p)) {
+        let c = vec2<u32>(u32(p.x), u32(p.y));
+        let idx = c.y * g.map_size.x + c.x;
+        return tiles[idx];
+    }
+    return MATERIAL_SENTINEL | (EFFECT_SENTINEL << 8u);
 }
 
 fn hash21(p: vec2<f32>) -> f32 {
@@ -275,15 +322,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let base_tile = vec2<i32>(floor(world));
     let local = fract(world);
 
-    let p00 = tile_at(base_tile);
-    let p_w = tile_at(base_tile + vec2<i32>(-1, 0));
-    let p_e = tile_at(base_tile + vec2<i32>(1, 0));
-    let p_n = tile_at(base_tile + vec2<i32>(0, -1));
-    let p_s = tile_at(base_tile + vec2<i32>(0, 1));
-    let p_nw = tile_at(base_tile + vec2<i32>(-1, -1));
-    let p_ne = tile_at(base_tile + vec2<i32>(1, -1));
-    let p_sw = tile_at(base_tile + vec2<i32>(-1, 1));
-    let p_se = tile_at(base_tile + vec2<i32>(1, 1));
+    let p00 = tile_at_clamped(base_tile);
+    let p_w = tile_at_or_sentinel(base_tile + vec2<i32>(-1, 0));
+    let p_e = tile_at_or_sentinel(base_tile + vec2<i32>(1, 0));
+    let p_n = tile_at_or_sentinel(base_tile + vec2<i32>(0, -1));
+    let p_s = tile_at_or_sentinel(base_tile + vec2<i32>(0, 1));
+    let p_nw = tile_at_or_sentinel(base_tile + vec2<i32>(-1, -1));
+    let p_ne = tile_at_or_sentinel(base_tile + vec2<i32>(1, -1));
+    let p_sw = tile_at_or_sentinel(base_tile + vec2<i32>(-1, 1));
+    let p_se = tile_at_or_sentinel(base_tile + vec2<i32>(1, 1));
 
     var mat = unpack_material(p00);
     var eff = unpack_effect(p00);
@@ -304,22 +351,22 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         var color_sum = material_color(mat, world);
         var effect_sum = effect_overlay(eff, world);
 
-        if (w != mat) {
+        if (material_blend_compatible(mat, w)) {
             color_sum = color_sum + material_color(w, world) * edge_l;
             effect_sum = effect_sum + effect_overlay(unpack_effect(p_w), world) * edge_l;
             wsum = wsum + edge_l;
         }
-        if (e != mat) {
+        if (material_blend_compatible(mat, e)) {
             color_sum = color_sum + material_color(e, world) * edge_r;
             effect_sum = effect_sum + effect_overlay(unpack_effect(p_e), world) * edge_r;
             wsum = wsum + edge_r;
         }
-        if (n != mat) {
+        if (material_blend_compatible(mat, n)) {
             color_sum = color_sum + material_color(n, world) * edge_t;
             effect_sum = effect_sum + effect_overlay(unpack_effect(p_n), world) * edge_t;
             wsum = wsum + edge_t;
         }
-        if (s != mat) {
+        if (material_blend_compatible(mat, s)) {
             color_sum = color_sum + material_color(s, world) * edge_b;
             effect_sum = effect_sum + effect_overlay(unpack_effect(p_s), world) * edge_b;
             wsum = wsum + edge_b;
@@ -331,25 +378,25 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let corner = blend * 1.35;
             if (local.x + local.y < corner) {
                 let nw = unpack_material(p_nw);
-                if (w == n && w != mat && nw == w) {
+                if (w == n && nw == w && material_blend_compatible(mat, w)) {
                     rgb = material_color(w, world) + effect_overlay(unpack_effect(p_nw), world);
                 }
             }
             if ((1.0 - local.x) + local.y < corner) {
                 let ne = unpack_material(p_ne);
-                if (e == n && e != mat && ne == e) {
+                if (e == n && ne == e && material_blend_compatible(mat, e)) {
                     rgb = material_color(e, world) + effect_overlay(unpack_effect(p_ne), world);
                 }
             }
             if (local.x + (1.0 - local.y) < corner) {
                 let sw = unpack_material(p_sw);
-                if (w == s && w != mat && sw == w) {
+                if (w == s && sw == w && material_blend_compatible(mat, w)) {
                     rgb = material_color(w, world) + effect_overlay(unpack_effect(p_sw), world);
                 }
             }
             if ((1.0 - local.x) + (1.0 - local.y) < corner) {
                 let se = unpack_material(p_se);
-                if (e == s && e != mat && se == e) {
+                if (e == s && se == e && material_blend_compatible(mat, e)) {
                     rgb = material_color(e, world) + effect_overlay(unpack_effect(p_se), world);
                 }
             }
