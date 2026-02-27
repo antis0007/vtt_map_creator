@@ -3,6 +3,16 @@ use anyhow::{Context, Result};
 use image::{ImageBuffer, Rgba};
 use std::{fs, path::Path};
 
+const WALL_BLOCK_COLS: f32 = 3.0;
+const WALL_BLOCK_ROWS: f32 = 2.0;
+const WALL_SEAM_WIDTH: f32 = 0.06;
+const WALL_FRAME_THICKNESS: f32 = 0.10;
+const WALL_DOOR_WIDTH: f32 = 0.46;
+const WALL_DOOR_HEIGHT: f32 = 0.78;
+const WALL_WINDOW_WIDTH: f32 = 0.56;
+const WALL_WINDOW_HEIGHT: f32 = 0.42;
+const WALL_MULLION_THICKNESS: f32 = 0.05;
+
 pub fn save_map(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
     let json = serde_json::to_string_pretty(doc)?;
     fs::write(path.as_ref(), json)
@@ -40,7 +50,7 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
 }
 
 fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
-    let tile = [world[0].floor() as i32, world[1].floor() as i32];
+    let base_tile = [world[0].floor() as i32, world[1].floor() as i32];
     let local = [world[0].fract(), world[1].fract()];
     let mut mat = doc
         .terrain_at_i32_checked(tile[0], tile[1])
@@ -69,10 +79,7 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
                 doc.effect_at_i32(tile[0] - 1, tile[1]),
                 world,
             );
-            sum[0] += lc[0] * wl;
-            sum[1] += lc[1] * wl;
-            sum[2] += lc[2] * wl;
-            wsum += wl;
+            wsum += edge_l;
         }
         if let Some(r_mat) = r.filter(|&other| mat.blend_compatible(other)) {
             let rc = apply_effect_cpu(
@@ -80,10 +87,7 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
                 doc.effect_at_i32(tile[0] + 1, tile[1]),
                 world,
             );
-            sum[0] += rc[0] * wr;
-            sum[1] += rc[1] * wr;
-            sum[2] += rc[2] * wr;
-            wsum += wr;
+            wsum += edge_r;
         }
         if let Some(t_mat) = t.filter(|&other| mat.blend_compatible(other)) {
             let tc = apply_effect_cpu(
@@ -91,10 +95,7 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
                 doc.effect_at_i32(tile[0], tile[1] - 1),
                 world,
             );
-            sum[0] += tc[0] * wt;
-            sum[1] += tc[1] * wt;
-            sum[2] += tc[2] * wt;
-            wsum += wt;
+            wsum += edge_t;
         }
         if let Some(b_mat) = b.filter(|&other| mat.blend_compatible(other)) {
             let bc = apply_effect_cpu(
@@ -102,15 +103,18 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
                 doc.effect_at_i32(tile[0], tile[1] + 1),
                 world,
             );
-            sum[0] += bc[0] * wb;
-            sum[1] += bc[1] * wb;
-            sum[2] += bc[2] * wb;
-            wsum += wb;
+            wsum += edge_b;
         }
-        c = [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum];
 
-        if mat.diagonal_blend() {
-            let corner = blend * 1.35;
+        let mut c = [
+            (color_sum[0] + effect_sum[0]) / wsum.max(0.0001),
+            (color_sum[1] + effect_sum[1]) / wsum.max(0.0001),
+            (color_sum[2] + effect_sum[2]) / wsum.max(0.0001),
+        ];
+
+        if crate::blend_rules::material_diagonal(mat) {
+            let corner = blend * crate::blend_rules::DIAGONAL_CORNER_SCALE;
+
             if local[0] + local[1] < corner {
                 let nw = doc.terrain_at_i32_checked(tile[0] - 1, tile[1] - 1);
                 if let (Some(l_mat), Some(t_mat), Some(nw_mat)) = (l, t, nw) {
@@ -122,8 +126,15 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
                 }
             }
         }
+
+        return [
+            c[0].clamp(0.0, 255.0) as u8,
+            c[1].clamp(0.0, 255.0) as u8,
+            c[2].clamp(0.0, 255.0) as u8,
+        ];
     }
 
+    let c = add3(material_rgb(mat, world), effect_overlay_cpu(eff, world));
     [
         c[0].clamp(0.0, 255.0) as u8,
         c[1].clamp(0.0, 255.0) as u8,
@@ -135,26 +146,40 @@ fn edge_weight(distance: f32, blend: f32) -> f32 {
     1.0 - smoothstep(0.0, blend, distance)
 }
 
-fn apply_effect_cpu(mut c: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
+fn add_weighted(base: [f32; 3], value: [f32; 3], weight: f32) -> [f32; 3] {
+    [
+        base[0] + value[0] * weight,
+        base[1] + value[1] * weight,
+        base[2] + value[2] * weight,
+    ]
+}
+
+fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn effect_overlay_cpu(effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
     match effect {
-        EffectKind::None => c,
+        EffectKind::None => [0.0, 0.0, 0.0],
         EffectKind::Wind => {
             let gust = 0.5 + 0.5 * ((p[0] * 4.0 + p[1] * 1.3).sin() * (p[1] * 3.0).cos());
-            c[1] += 10.0 * gust;
-            c
+            [0.0, 10.0 * gust, 0.0]
         }
         EffectKind::Rain => {
             let streak = ((p[0] * 12.0 + p[1] * 28.0).fract() * 2.0 - 1.0).abs();
             let mask = (1.0 - smoothstep(0.65, 0.95, streak)) * 18.0;
-            c[0] += mask;
-            c[1] += mask;
-            c[2] += mask * 1.4;
-            c
+            [mask, mask, mask * 1.4]
         }
     }
 }
 
 fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
+    let tile_local = [p[0].fract(), p[1].fract()];
+    let block_grid = [
+        tile_local[0] * WALL_BLOCK_COLS,
+        tile_local[1] * WALL_BLOCK_ROWS,
+    ];
+    let block_id = [block_grid[0].floor(), block_grid[1].floor()];
     let n1 = fbm(p[0] * 2.7, p[1] * 2.7, 4);
     let n2 = fbm(p[0] * 6.4 + 11.0, p[1] * 6.4 - 3.0, 3);
     match mat {
@@ -200,28 +225,116 @@ fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
             tint([126.0, 112.0, 91.0], 0.82 + chip)
         }
         MaterialKind::Wall => {
-            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            let seam = wall_block_mask(tile_local);
+            let block_seed = hash2(
+                (p[0].floor() * 11.0 + block_id[0] * 3.0) as i32,
+                (p[1].floor() * 11.0 + block_id[1] * 3.0) as i32,
+                33,
+            );
             mix(
-                tint([136.0, 143.0, 150.0], 0.82 + n1 * 0.10),
+                tint(
+                    [136.0, 143.0, 150.0],
+                    0.82 + n1 * 0.10 + (block_seed - 0.5) * 0.10,
+                ),
                 [95.0, 99.0, 102.0],
-                seam,
+                seam * 0.95,
             )
         }
         MaterialKind::WallDoor => {
-            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            let seam = wall_block_mask(tile_local);
+            let stone = mix(
+                tint([135.0, 143.0, 153.0], 0.82 + n1 * 0.09),
+                [92.0, 95.0, 99.0],
+                seam * 0.9,
+            );
+
+            let opening_min = [
+                0.5 - WALL_DOOR_WIDTH * 0.5,
+                1.0 - WALL_DOOR_HEIGHT + WALL_FRAME_THICKNESS,
+            ];
+            let opening_max = [0.5 + WALL_DOOR_WIDTH * 0.5, 1.0 - WALL_FRAME_THICKNESS];
+            let frame_min = [
+                opening_min[0] - WALL_FRAME_THICKNESS,
+                opening_min[1] - WALL_FRAME_THICKNESS,
+            ];
+            let frame_max = [opening_max[0] + WALL_FRAME_THICKNESS, 1.0];
+
+            let opening = rect_mask(tile_local, opening_min, opening_max);
+            let frame = (rect_mask(tile_local, frame_min, frame_max) - opening).max(0.0);
+            let with_frame = mix(stone, [160.0, 167.0, 173.0], frame);
             mix(
-                tint([126.0, 88.0, 55.0], 0.86 + n1 * 0.10),
-                [150.0, 156.0, 160.0],
-                seam,
+                with_frame,
+                tint([64.0, 38.0, 21.0], 0.78 + n2 * 0.12),
+                opening,
             )
         }
         MaterialKind::WallWindow => {
-            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
-            mix(
-                tint([96.0, 123.0, 152.0], 0.86 + n1 * 0.10),
-                [156.0, 162.0, 166.0],
-                seam,
-            )
+            let seam = wall_block_mask(tile_local);
+            let wall = mix(
+                tint([135.0, 143.0, 153.0], 0.83 + n1 * 0.09),
+                [92.0, 95.0, 99.0],
+                seam * 0.9,
+            );
+
+            let outer_min = [
+                0.5 - WALL_WINDOW_WIDTH * 0.5,
+                0.36 - WALL_WINDOW_HEIGHT * 0.5,
+            ];
+            let outer_max = [
+                0.5 + WALL_WINDOW_WIDTH * 0.5,
+                0.36 + WALL_WINDOW_HEIGHT * 0.5,
+            ];
+            let inner_min = [
+                outer_min[0] + WALL_FRAME_THICKNESS,
+                outer_min[1] + WALL_FRAME_THICKNESS,
+            ];
+            let inner_max = [
+                outer_max[0] - WALL_FRAME_THICKNESS,
+                outer_max[1] - WALL_FRAME_THICKNESS,
+            ];
+            let inner_size = [inner_max[0] - inner_min[0], inner_max[1] - inner_min[1]];
+
+            let window_outer = rect_mask(tile_local, outer_min, outer_max);
+            let glass_area = rect_mask(tile_local, inner_min, inner_max);
+            let frame = (window_outer - glass_area).max(0.0);
+
+            let v_mid = inner_min[0] + inner_size[0] * 0.5;
+            let h_mid = inner_min[1] + inner_size[1] * 0.5;
+            let v_bar = rect_mask(
+                tile_local,
+                [v_mid - WALL_MULLION_THICKNESS, inner_min[1]],
+                [v_mid + WALL_MULLION_THICKNESS, inner_max[1]],
+            );
+            let h_bar = rect_mask(
+                tile_local,
+                [inner_min[0], h_mid - WALL_MULLION_THICKNESS],
+                [inner_max[0], h_mid + WALL_MULLION_THICKNESS],
+            );
+            let mullion = v_bar.max(h_bar) * glass_area;
+
+            let pane_seed = hash2(
+                (p[0].floor() * 7.0 + block_id[0]) as i32,
+                (p[1].floor() * 7.0 + block_id[1]) as i32,
+                71,
+            );
+            let glass = tint([84.0, 128.0, 168.0], 0.84 + pane_seed * 0.16);
+            let highlight = rect_mask(
+                tile_local,
+                [inner_min[0] + 0.03, inner_min[1] + 0.03],
+                [
+                    inner_min[0] + inner_size[0] * 0.35,
+                    inner_min[1] + inner_size[1] * 0.26,
+                ],
+            ) * glass_area;
+
+            let mut color = mix(wall, [162.0, 168.0, 174.0], frame);
+            color = mix(color, glass, glass_area);
+            color = mix(color, [156.0, 162.0, 168.0], mullion);
+            [
+                color[0] + 30.0 * highlight,
+                color[1] + 36.0 * highlight,
+                color[2] + 42.0 * highlight,
+            ]
         }
         MaterialKind::FloorWood => {
             let seam = topdown_grid(p, 3.4, 1.0, 0.06);
@@ -232,6 +345,22 @@ fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
             )
         }
     }
+}
+
+fn rect_mask(p: [f32; 2], min_p: [f32; 2], max_p: [f32; 2]) -> f32 {
+    if p[0] >= min_p[0] && p[0] <= max_p[0] && p[1] >= min_p[1] && p[1] <= max_p[1] {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn wall_block_mask(tile_local: [f32; 2]) -> f32 {
+    let fx = (tile_local[0] * WALL_BLOCK_COLS).fract();
+    let fy = (tile_local[1] * WALL_BLOCK_ROWS).fract();
+    let gx = 1.0 - smoothstep(0.0, WALL_SEAM_WIDTH, fx.min(1.0 - fx));
+    let gy = 1.0 - smoothstep(0.0, WALL_SEAM_WIDTH, fy.min(1.0 - fy));
+    gx.max(gy)
 }
 
 fn topdown_grid(p: [f32; 2], sx: f32, sy: f32, width: f32) -> f32 {
@@ -300,4 +429,69 @@ fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
         a[1] + (b[1] - a[1]) * t,
         a[2] + (b[2] - a[2]) * t,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shaded_world;
+    use crate::model::{EffectKind, MapDocument, MaterialKind};
+
+    fn doc_from_rows(rows: &[[MaterialKind; 3]; 3]) -> MapDocument {
+        let mut doc = MapDocument::new(3, 3);
+        doc.tile_px = 32;
+        for (y, row) in rows.iter().enumerate() {
+            for (x, material) in row.iter().enumerate() {
+                let idx = doc.idx(x as u32, y as u32);
+                doc.terrain[idx] = *material;
+                doc.effects[idx] = EffectKind::None;
+            }
+        }
+        doc
+    }
+
+    fn checksum(doc: &MapDocument) -> u64 {
+        let mut acc = 0u64;
+        for py in 0..(doc.height * doc.tile_px) {
+            for px in 0..(doc.width * doc.tile_px) {
+                let world = [
+                    px as f32 / doc.tile_px as f32,
+                    py as f32 / doc.tile_px as f32,
+                ];
+                let c = shaded_world(doc, world);
+                acc = acc
+                    .wrapping_mul(1_099_511_628_211)
+                    .wrapping_add(u64::from(c[0]))
+                    .wrapping_add(u64::from(c[1]) << 8)
+                    .wrapping_add(u64::from(c[2]) << 16);
+            }
+        }
+        acc
+    }
+    #[test]
+    fn diagonal_corner_fixtures_match_snapshot() {
+        let path = MaterialKind::Path;
+        let dirt = MaterialKind::Dirt;
+
+        let nw_doc = doc_from_rows(&[[dirt, dirt, path], [dirt, path, path], [path, path, path]]);
+        assert_eq!(shaded_world(&nw_doc, [1.02, 1.02]), [90, 68, 47]);
+
+        let ne_doc = doc_from_rows(&[[path, dirt, dirt], [path, path, dirt], [path, path, path]]);
+        assert_eq!(shaded_world(&ne_doc, [1.98, 1.02]), [88, 66, 46]);
+
+        let sw_doc = doc_from_rows(&[[path, path, path], [dirt, path, path], [dirt, dirt, path]]);
+        assert_eq!(shaded_world(&sw_doc, [1.02, 1.98]), [87, 66, 45]);
+
+        let se_doc = doc_from_rows(&[[path, path, path], [path, path, dirt], [path, dirt, dirt]]);
+        assert_eq!(shaded_world(&se_doc, [1.98, 1.98]), [90, 68, 47]);
+    }
+
+    #[test]
+    fn export_parity_checksum_fixture() {
+        let g = MaterialKind::Grass;
+        let p = MaterialKind::Path;
+        let w = MaterialKind::Wall;
+        let s = MaterialKind::Sand;
+        let doc = doc_from_rows(&[[g, p, g], [w, p, s], [g, w, g]]);
+        assert_eq!(checksum(&doc), 17_084_880_885_835_417_417);
+    }
 }

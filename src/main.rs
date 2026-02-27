@@ -1,4 +1,5 @@
 mod app;
+mod blend_rules;
 mod gpu_renderer;
 mod io;
 mod model;

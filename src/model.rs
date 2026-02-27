@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+use crate::blend_rules;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[repr(u8)]
 pub enum MaterialKind {
@@ -53,21 +55,11 @@ impl MaterialKind {
     }
 
     pub fn blends(self) -> bool {
-        matches!(
-            self,
-            Self::Dirt
-                | Self::Grass
-                | Self::Sand
-                | Self::Water
-                | Self::Lava
-                | Self::Gravel
-                | Self::Path
-                | Self::Wall
-        )
+        blend_rules::material_blends(self)
     }
 
     pub fn diagonal_blend(self) -> bool {
-        matches!(self, Self::Path | Self::Wall)
+        blend_rules::material_diagonal(self)
     }
 
     pub fn blend_compatible(self, other: Self) -> bool {
