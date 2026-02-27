@@ -56,9 +56,6 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
     let eff = doc.effect_at_i32(tile[0], tile[1]);
     let blend = 0.2;
 
-    let mut c = material_rgb(mat, world);
-    c = apply_effect_cpu(c, eff, world);
-
     if mat.blends() {
         let l = doc.terrain_at_i32(tile[0] - 1, tile[1]);
         let r = doc.terrain_at_i32(tile[0] + 1, tile[1]);
@@ -77,7 +74,6 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
         let wsw = corner_weight(local[0], 1.0 - local[1], blend);
         let wse = corner_weight(1.0 - local[0], 1.0 - local[1], blend);
 
-        let mut sum = c;
         let mut wsum = 1.0_f32;
         let lw = if l != mat { wl } else { 0.0 };
         let rw = if r != mat { wr } else { 0.0 };
