@@ -40,18 +40,24 @@ fn unpack_effect(packed: u32) -> u32 {
 
 const MATERIAL_DIRT: u32 = 0u;
 const MATERIAL_GRASS: u32 = 1u;
-const MATERIAL_SAND: u32 = 2u;
-const MATERIAL_WATER: u32 = 3u;
-const MATERIAL_LAVA: u32 = 4u;
-const MATERIAL_GRAVEL: u32 = 5u;
-const MATERIAL_BRICK: u32 = 6u;
-const MATERIAL_PATH: u32 = 7u;
-const MATERIAL_WALL: u32 = 8u;
-const MATERIAL_WALL_DOOR: u32 = 9u;
-const MATERIAL_WALL_WINDOW: u32 = 10u;
-const MATERIAL_FLOOR_WOOD: u32 = 11u;
+const MATERIAL_HIGH_GRASS: u32 = 2u;
+const MATERIAL_BUSHES: u32 = 3u;
+const MATERIAL_SAND: u32 = 4u;
+const MATERIAL_WATER: u32 = 5u;
+const MATERIAL_LAVA: u32 = 6u;
+const MATERIAL_GRAVEL: u32 = 7u;
+const MATERIAL_BRICK: u32 = 8u;
+const MATERIAL_PATH: u32 = 9u;
+const MATERIAL_WALL: u32 = 10u;
+const MATERIAL_WALL_DOOR: u32 = 11u;
+const MATERIAL_WALL_WINDOW: u32 = 12u;
+const MATERIAL_FLOOR_WOOD: u32 = 13u;
 const MATERIAL_SENTINEL: u32 = 255u;
 const EFFECT_SENTINEL: u32 = 255u;
+
+fn is_foliage(material: u32) -> bool {
+    return material == MATERIAL_GRASS || material == MATERIAL_HIGH_GRASS || material == MATERIAL_BUSHES;
+}
 
 fn material_blends(material: u32) -> bool {
     return material <= MATERIAL_GRAVEL || material == MATERIAL_PATH || material == MATERIAL_WALL;
@@ -73,8 +79,8 @@ fn material_blend_compatible(base: u32, neighbor: u32) -> bool {
     if (base == neighbor || !material_blends(base) || !material_blends(neighbor)) {
         return false;
     }
-    if ((base == MATERIAL_GRASS && material_structural(neighbor))
-        || (neighbor == MATERIAL_GRASS && material_structural(base))) {
+    if ((is_foliage(base) && material_structural(neighbor))
+        || (is_foliage(neighbor) && material_structural(base))) {
         return false;
     }
     return true;
@@ -137,6 +143,12 @@ fn fbm(p_in: vec2<f32>) -> f32 {
     return select(0.0, sum / norm, norm > 0.0);
 }
 
+fn vec_noise2(p: vec2<f32>, time: f32) -> vec2<f32> {
+    let a = fbm(p + vec2<f32>(time * 0.21, -time * 0.17));
+    let b = fbm(p * 1.07 + vec2<f32>(-13.4 - time * 0.16, 9.1 + time * 0.20));
+    return vec2<f32>(a * 2.0 - 1.0, b * 2.0 - 1.0);
+}
+
 fn plank_mask(p: vec2<f32>) -> f32 {
     let x = fract(p.x * 3.5);
     let seam = 1.0 - smoothstep(0.0, 0.06, min(x, 1.0 - x));
@@ -183,48 +195,61 @@ fn material_color(material: u32, world: vec2<f32>) -> vec3<f32> {
     let n1 = fbm(world * 2.6);
     let n2 = fbm(world * 6.2 + vec2<f32>(17.0, -9.0));
 
-    if (material == 0u) {
+    if (material == MATERIAL_DIRT) {
         let tint = 0.76 + n1 * 0.18 + n2 * 0.06;
         return vec3<f32>(0.40, 0.30, 0.21) * tint;
     }
-    if (material == 1u) {
-        let bands = 0.5 + 0.5 * sin(world.x * 14.0 + fbm(world * 2.5) * 3.0 + g.time * 1.4);
-        let blades = 0.5 + 0.5 * sin(world.x * 16.0 + world.y * 3.0 + n2 * 5.0 + g.time * 1.1);
-        let tint = 0.72 + n1 * 0.12 + bands * 0.10 + blades * 0.08;
-        return vec3<f32>(0.30, 0.50, 0.23) * tint + vec3<f32>(0.01, 0.03, 0.00);
+    if (is_foliage(material)) {
+        let type_scale = select(select(1.0, 1.25, material == MATERIAL_HIGH_GRASS), 0.7, material == MATERIAL_BUSHES);
+        let shade_base = select(select(0.72, 0.66, material == MATERIAL_HIGH_GRASS), 0.62, material == MATERIAL_BUSHES);
+        let band_amp = select(select(0.10, 0.13, material == MATERIAL_HIGH_GRASS), 0.18, material == MATERIAL_BUSHES);
+        let cluster_amp = select(select(0.08, 0.11, material == MATERIAL_HIGH_GRASS), 0.14, material == MATERIAL_BUSHES);
+        let wind_vec = vec_noise2(world * 0.48 + vec2<f32>(2.0, -5.0), g.time);
+        let orient = world.x * (12.0 + type_scale * 2.6) + world.y * (2.0 + type_scale) + wind_vec.x * 3.4 + wind_vec.y * 2.8;
+        let blades = 0.5 + 0.5 * sin(orient + n2 * (4.2 + type_scale));
+        let cluster = fbm(world * (3.4 + type_scale));
+        let detail = fbm(world * 11.0 + vec2<f32>(4.0, -3.0));
+        let tint = shade_base + n1 * 0.14 + blades * band_amp + cluster * cluster_amp;
+        let base = select(
+            select(vec3<f32>(0.30, 0.50, 0.23), vec3<f32>(0.26, 0.45, 0.21), material == MATERIAL_HIGH_GRASS),
+            vec3<f32>(0.21, 0.39, 0.18),
+            material == MATERIAL_BUSHES,
+        ) * tint;
+        let directional = vec3<f32>(base.x * 0.88, base.y * 1.08, base.z * 0.90);
+        return mix(base, directional, (detail * 0.5 + 0.5) * 0.25);
     }
-    if (material == 2u) {
+    if (material == MATERIAL_SAND) {
         let ripples = 0.5 + 0.5 * sin(world.x * 11.0 + world.y * 1.2 + n1 * 4.0);
         let tint = 0.82 + n2 * 0.08 + ripples * 0.08;
         return vec3<f32>(0.78, 0.70, 0.48) * tint;
     }
-    if (material == 3u) {
+    if (material == MATERIAL_WATER) {
         let wave = 0.5 + 0.5 * sin((world.x + world.y) * 2.4 + fbm(world * 0.7) * 4.0 - g.time * 1.8);
         let caustic = 0.5 + 0.5 * sin(world.x * 18.0 - world.y * 10.0 + g.time * 2.0 + n2 * 8.0);
         let base = vec3<f32>(0.10, 0.32, 0.52) * (0.76 + wave * 0.28);
         return base + vec3<f32>(0.03, 0.09, 0.13) * caustic;
     }
-    if (material == 4u) {
+    if (material == MATERIAL_LAVA) {
         let molten = 0.5 + 0.5 * sin(world.x * 9.0 + n1 * 8.0 - g.time * 2.2) * cos(world.y * 7.0 - n2 * 6.0 + g.time * 1.8);
         let base = vec3<f32>(0.58, 0.16, 0.04) * (0.74 + molten * 0.30);
         return base + vec3<f32>(0.22, 0.10, 0.00) * molten;
     }
-    if (material == 5u) {
+    if (material == MATERIAL_GRAVEL) {
         let grain = hash21(floor(world * 7.0));
         let tint = 0.82 + n1 * 0.08;
         return vec3<f32>(0.48, 0.48, 0.46) * tint + vec3<f32>(0.08, 0.08, 0.08) * grain;
     }
-    if (material == 6u) {
+    if (material == MATERIAL_BRICK) {
         let seam = brick_topdown_mask(world + vec2<f32>(n1 * 0.02, n2 * 0.02));
         let brick = vec3<f32>(0.49, 0.22, 0.16) * (0.86 + n1 * 0.12);
         let grout = vec3<f32>(0.71, 0.66, 0.60);
         return mix(brick, grout, seam * 0.9);
     }
-    if (material == 7u) {
+    if (material == MATERIAL_PATH) {
         let chips = hash21(floor(world * 5.0));
         return vec3<f32>(0.50, 0.43, 0.33) * (0.86 + n1 * 0.08 + chips * 0.08);
     }
-    if (material == 8u) {
+    if (material == MATERIAL_WALL) {
         let seam = wall_block_mask(tile_local);
         let block_seed = hash21(floor(world) * 11.0 + block_id * 3.0);
         let block_light = 0.82 + n1 * 0.10 + (block_seed - 0.5) * 0.10;
@@ -232,7 +257,7 @@ fn material_color(material: u32, world: vec2<f32>) -> vec3<f32> {
         let mortar = vec3<f32>(0.37, 0.38, 0.39);
         return mix(stone, mortar, seam * 0.95);
     }
-    if (material == 9u) {
+    if (material == MATERIAL_WALL_DOOR) {
         let seam = wall_block_mask(tile_local);
         let stone = vec3<f32>(0.53, 0.56, 0.60) * (0.82 + n1 * 0.09);
         let mortar = vec3<f32>(0.36, 0.37, 0.39);
@@ -250,7 +275,7 @@ fn material_color(material: u32, world: vec2<f32>) -> vec3<f32> {
         let with_frame = mix(wall, trim, frame);
         return mix(with_frame, door_wood, opening);
     }
-    if (material == 10u) {
+    if (material == MATERIAL_WALL_WINDOW) {
         let seam = wall_block_mask(tile_local);
         let stone = vec3<f32>(0.53, 0.56, 0.60) * (0.84 + n1 * 0.08);
         let mortar = vec3<f32>(0.36, 0.37, 0.39);
@@ -287,15 +312,49 @@ fn material_color(material: u32, world: vec2<f32>) -> vec3<f32> {
     return mix(wood, gap, seam * 0.8);
 }
 
-fn effect_overlay(effect: u32, world: vec2<f32>) -> vec3<f32> {
+fn rain_streak(world: vec2<f32>, dir: vec2<f32>, phase: f32, freq: f32, width: f32, speed: f32) -> f32 {
+    let dir_n = normalize(dir);
+    let orth = vec2<f32>(-dir_n.y, dir_n.x);
+    let u = dot(world, orth);
+    let v = dot(world, dir_n);
+    let jitter = fbm(world * 2.8 + vec2<f32>(phase, -phase)) * 0.35;
+    let lane = fract((u + phase + jitter) * freq - g.time * speed);
+    let core = 1.0 - smoothstep(0.5 - width, 0.5 + width, abs(lane - 0.5));
+    let length = 0.5 + 0.5 * sin(v * 9.0 + phase * 3.0 - g.time * speed * 0.7);
+    return core * (0.45 + length * 0.55);
+}
+
+fn rain_drops(world: vec2<f32>, grid: f32, threshold: f32, speed: f32) -> f32 {
+    let cell = floor(world * grid + vec2<f32>(0.0, g.time * speed));
+    let seed = hash21(cell + vec2<f32>(17.0, -9.0));
+    if (seed < 1.0 - threshold) {
+        return 0.0;
+    }
+    let local = fract(world * grid) - vec2<f32>(0.5, 0.5);
+    let r = length(local);
+    let spot = 1.0 - smoothstep(0.12, 0.42, r);
+    return spot * ((seed - (1.0 - threshold)) / threshold);
+}
+
+fn effect_overlay(effect: u32, material: u32, world: vec2<f32>, strength: f32) -> vec3<f32> {
+    let s = clamp(strength, 0.0, 2.0);
     if (effect == 1u) {
-        let gust = 0.5 + 0.5 * sin(world.x * 4.0 + world.y * 1.5 + g.time * 1.7 + fbm(world * 1.5) * 4.0);
-        return vec3<f32>(0.03, 0.08, 0.02) * gust;
+        if (!is_foliage(material)) {
+            return vec3<f32>(0.0);
+        }
+        let flow = vec_noise2(world * 0.35 + vec2<f32>(3.1, -2.4), g.time);
+        let turbulence = fbm(world * 1.4 + vec2<f32>(11.0 - g.time * 0.3, -7.0 + g.time * 0.25));
+        let gust = clamp(flow.x * 0.75 + flow.y * 0.45 + turbulence * 0.35, 0.0, 1.0);
+        let lift = gust * 0.12 * s;
+        return vec3<f32>(-0.002, 0.01, -0.002) + vec3<f32>(0.02, 0.03, 0.015) * lift;
     }
     if (effect == 2u) {
-        let streak = abs(fract(world.x * 14.0 + world.y * 32.0 - g.time * 8.0) * 2.0 - 1.0);
-        let band = 1.0 - smoothstep(0.72, 0.96, streak);
-        return vec3<f32>(0.08, 0.09, 0.13) * band;
+        let streak1 = rain_streak(world, vec2<f32>(0.52, -1.35), 8.0, 22.0, 0.18, 1.3);
+        let streak2 = rain_streak(world, vec2<f32>(0.16, -1.0), -4.0, 34.0, 0.12, 2.0);
+        let streak3 = rain_streak(world, vec2<f32>(0.73, -1.7), 13.0, 48.0, 0.09, 2.8);
+        let drops = rain_drops(world, 9.5, 0.22, 2.2) * 0.35 + rain_drops(world + vec2<f32>(5.7, -1.3), 17.0, 0.13, 3.0) * 0.20;
+        let wet = clamp(streak1 * 0.50 + streak2 * 0.32 + streak3 * 0.22 + drops, 0.0, 1.0) * s;
+        return vec3<f32>(-0.06, -0.06, -0.05) * wet + vec3<f32>(0.0, 0.0, 0.03) * wet;
     }
     return vec3<f32>(0.0, 0.0, 0.0);
 }
@@ -367,7 +426,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
         var wsum = 1.0;
         var color_sum = material_color(mat, world);
-        var effect_sum = effect_overlay(eff, world);
+        var effect_sum = effect_overlay(eff, mat, world, 1.0);
         let ww = edge_l * select(0.0, 1.0, w != mat);
         let we = edge_r * select(0.0, 1.0, e != mat);
         let wn = edge_t * select(0.0, 1.0, n != mat);
@@ -378,21 +437,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let wse = corner_se * select(0.0, 1.0, se != mat);
 
         color_sum = color_sum + material_color(w, world) * ww;
-        effect_sum = effect_sum + effect_overlay(unpack_effect(p_w), world) * ww;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_w), w, world, 1.0) * ww;
         color_sum = color_sum + material_color(e, world) * we;
-        effect_sum = effect_sum + effect_overlay(unpack_effect(p_e), world) * we;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_e), e, world, 1.0) * we;
         color_sum = color_sum + material_color(n, world) * wn;
-        effect_sum = effect_sum + effect_overlay(unpack_effect(p_n), world) * wn;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_n), n, world, 1.0) * wn;
         color_sum = color_sum + material_color(s, world) * ws;
-        effect_sum = effect_sum + effect_overlay(unpack_effect(p_s), world) * ws;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_s), s, world, 1.0) * ws;
         color_sum = color_sum + material_color(nw, world) * wnw;
-        effect_sum = effect_sum + effect_overlay(unpack_effect(p_nw), world) * wnw;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_nw), nw, world, 1.0) * wnw;
         color_sum = color_sum + material_color(ne, world) * wne;
-        effect_sum = effect_sum + effect_overlay(unpack_effect(p_ne), world) * wne;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_ne), ne, world, 1.0) * wne;
         color_sum = color_sum + material_color(sw, world) * wsw;
-        effect_sum = effect_sum + effect_overlay(unpack_effect(p_sw), world) * wsw;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_sw), sw, world, 1.0) * wsw;
         color_sum = color_sum + material_color(se, world) * wse;
-        effect_sum = effect_sum + effect_overlay(unpack_effect(p_se), world) * wse;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_se), se, world, 1.0) * wse;
         wsum = wsum + ww + we + wn + ws + wnw + wne + wsw + wse;
 
         var rgb = (color_sum + effect_sum) / max(wsum, 0.0001);
@@ -411,10 +470,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let mask_sw = (1.0 - smoothstep(-aa, aa, local.x + (1.0 - local.y) - corner)) * valid_sw;
             let mask_se = (1.0 - smoothstep(-aa, aa, (1.0 - local.x) + (1.0 - local.y) - corner)) * valid_se;
 
-            let rgb_nw = material_color(w, world) + effect_overlay(unpack_effect(p_nw), world);
-            let rgb_ne = material_color(e, world) + effect_overlay(unpack_effect(p_ne), world);
-            let rgb_sw = material_color(w, world) + effect_overlay(unpack_effect(p_sw), world);
-            let rgb_se = material_color(e, world) + effect_overlay(unpack_effect(p_se), world);
+            let rgb_nw = material_color(w, world) + effect_overlay(unpack_effect(p_nw), w, world, 1.0);
+            let rgb_ne = material_color(e, world) + effect_overlay(unpack_effect(p_ne), e, world, 1.0);
+            let rgb_sw = material_color(w, world) + effect_overlay(unpack_effect(p_sw), w, world, 1.0);
+            let rgb_se = material_color(e, world) + effect_overlay(unpack_effect(p_se), e, world, 1.0);
 
             rgb = mix(rgb, rgb_nw, clamp(mask_nw, 0.0, 1.0));
             rgb = mix(rgb, rgb_ne, clamp(mask_ne, 0.0, 1.0));
@@ -430,7 +489,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(rgb, 1.0);
     }
 
-    var rgb = material_color(mat, world) + effect_overlay(eff, world);
+    var rgb = material_color(mat, world) + effect_overlay(eff, mat, world, 1.0);
     let line = max(
         1.0 - smoothstep(0.0, 0.02, min(local.x, 1.0 - local.x)),
         1.0 - smoothstep(0.0, 0.02, min(local.y, 1.0 - local.y)),

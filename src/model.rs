@@ -19,12 +19,16 @@ pub enum MaterialKind {
     WallDoor = 9,
     WallWindow = 10,
     FloorWood = 11,
+    HighGrass = 12,
+    Bushes = 13,
 }
 
 impl MaterialKind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::Dirt,
         Self::Grass,
+        Self::HighGrass,
+        Self::Bushes,
         Self::Sand,
         Self::Water,
         Self::Lava,
@@ -41,6 +45,8 @@ impl MaterialKind {
         match self {
             Self::Dirt => "Dirt",
             Self::Grass => "Grass",
+            Self::HighGrass => "High Grass",
+            Self::Bushes => "Bushes",
             Self::Sand => "Sand",
             Self::Water => "Water",
             Self::Lava => "Lava",
@@ -67,8 +73,8 @@ impl MaterialKind {
             return false;
         }
 
-        if (self == Self::Grass && other.is_structural())
-            || (other == Self::Grass && self.is_structural())
+        if (self.is_foliage() && other.is_structural())
+            || (other.is_foliage() && self.is_structural())
         {
             return false;
         }
@@ -81,6 +87,10 @@ impl MaterialKind {
             self,
             Self::Brick | Self::Wall | Self::WallDoor | Self::WallWindow | Self::FloorWood
         )
+    }
+
+    pub fn is_foliage(self) -> bool {
+        matches!(self, Self::Grass | Self::HighGrass | Self::Bushes)
     }
 }
 

@@ -9,6 +9,8 @@ pub fn material_blends(material: MaterialKind) -> bool {
         material,
         MaterialKind::Dirt
             | MaterialKind::Grass
+            | MaterialKind::HighGrass
+            | MaterialKind::Bushes
             | MaterialKind::Sand
             | MaterialKind::Water
             | MaterialKind::Lava

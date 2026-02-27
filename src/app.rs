@@ -97,6 +97,8 @@ impl AtlasForgeApp {
         match material {
             MaterialKind::Dirt => Color32::from_rgb(106, 75, 52),
             MaterialKind::Grass => Color32::from_rgb(66, 120, 58),
+            MaterialKind::HighGrass => Color32::from_rgb(57, 106, 50),
+            MaterialKind::Bushes => Color32::from_rgb(41, 88, 39),
             MaterialKind::Sand => Color32::from_rgb(196, 176, 122),
             MaterialKind::Water => Color32::from_rgb(43, 98, 145),
             MaterialKind::Lava => Color32::from_rgb(176, 54, 24),
