@@ -186,6 +186,16 @@ fn effect_overlay(effect: u32, world: vec2<f32>) -> vec3<f32> {
     return vec3<f32>(0.0, 0.0, 0.0);
 }
 
+fn edge_weight(distance: f32, blend: f32) -> f32 {
+    return 1.0 - smoothstep(0.0, blend, distance);
+}
+
+fn corner_weight(dx: f32, dy: f32, blend: f32) -> f32 {
+    let radius = max(blend * 1.4142135, 0.0001);
+    let d = length(vec2<f32>(dx, dy));
+    return 1.0 - smoothstep(0.0, radius, d);
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VsOut {
     var pos = array<vec2<f32>, 3>(
@@ -218,74 +228,84 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let p_sw = tile_at(base_tile + vec2<i32>(-1, 1));
     let p_se = tile_at(base_tile + vec2<i32>(1, 1));
 
-    var mat = unpack_material(p00);
-    var eff = unpack_effect(p00);
+    let mat = unpack_material(p00);
+    let eff = unpack_effect(p00);
 
     let blend = clamp(g.blend_strength, 0.0, 0.48);
     if (blend > 0.0 && material_blends(mat)) {
-        let edge_l = 1.0 - smoothstep(0.0, blend, local.x);
-        let edge_r = 1.0 - smoothstep(0.0, blend, 1.0 - local.x);
-        let edge_t = 1.0 - smoothstep(0.0, blend, local.y);
-        let edge_b = 1.0 - smoothstep(0.0, blend, 1.0 - local.y);
+        let edge_l = edge_weight(local.x, blend);
+        let edge_r = edge_weight(1.0 - local.x, blend);
+        let edge_t = edge_weight(local.y, blend);
+        let edge_b = edge_weight(1.0 - local.y, blend);
+        let corner_nw = corner_weight(local.x, local.y, blend);
+        let corner_ne = corner_weight(1.0 - local.x, local.y, blend);
+        let corner_sw = corner_weight(local.x, 1.0 - local.y, blend);
+        let corner_se = corner_weight(1.0 - local.x, 1.0 - local.y, blend);
 
         let w = unpack_material(p_w);
         let e = unpack_material(p_e);
         let n = unpack_material(p_n);
         let s = unpack_material(p_s);
+        let nw = unpack_material(p_nw);
+        let ne = unpack_material(p_ne);
+        let sw = unpack_material(p_sw);
+        let se = unpack_material(p_se);
 
         var wsum = 1.0;
         var color_sum = material_color(mat, world);
         var effect_sum = effect_overlay(eff, world);
+        let ww = edge_l * select(0.0, 1.0, w != mat);
+        let we = edge_r * select(0.0, 1.0, e != mat);
+        let wn = edge_t * select(0.0, 1.0, n != mat);
+        let ws = edge_b * select(0.0, 1.0, s != mat);
+        let wnw = corner_nw * select(0.0, 1.0, nw != mat);
+        let wne = corner_ne * select(0.0, 1.0, ne != mat);
+        let wsw = corner_sw * select(0.0, 1.0, sw != mat);
+        let wse = corner_se * select(0.0, 1.0, se != mat);
 
-        if (w != mat) {
-            color_sum = color_sum + material_color(w, world) * edge_l;
-            effect_sum = effect_sum + effect_overlay(unpack_effect(p_w), world) * edge_l;
-            wsum = wsum + edge_l;
-        }
-        if (e != mat) {
-            color_sum = color_sum + material_color(e, world) * edge_r;
-            effect_sum = effect_sum + effect_overlay(unpack_effect(p_e), world) * edge_r;
-            wsum = wsum + edge_r;
-        }
-        if (n != mat) {
-            color_sum = color_sum + material_color(n, world) * edge_t;
-            effect_sum = effect_sum + effect_overlay(unpack_effect(p_n), world) * edge_t;
-            wsum = wsum + edge_t;
-        }
-        if (s != mat) {
-            color_sum = color_sum + material_color(s, world) * edge_b;
-            effect_sum = effect_sum + effect_overlay(unpack_effect(p_s), world) * edge_b;
-            wsum = wsum + edge_b;
-        }
+        color_sum = color_sum + material_color(w, world) * ww;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_w), world) * ww;
+        color_sum = color_sum + material_color(e, world) * we;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_e), world) * we;
+        color_sum = color_sum + material_color(n, world) * wn;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_n), world) * wn;
+        color_sum = color_sum + material_color(s, world) * ws;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_s), world) * ws;
+        color_sum = color_sum + material_color(nw, world) * wnw;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_nw), world) * wnw;
+        color_sum = color_sum + material_color(ne, world) * wne;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_ne), world) * wne;
+        color_sum = color_sum + material_color(sw, world) * wsw;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_sw), world) * wsw;
+        color_sum = color_sum + material_color(se, world) * wse;
+        effect_sum = effect_sum + effect_overlay(unpack_effect(p_se), world) * wse;
+        wsum = wsum + ww + we + wn + ws + wnw + wne + wsw + wse;
 
         var rgb = (color_sum + effect_sum) / max(wsum, 0.0001);
 
         if (material_diagonal(mat)) {
             let corner = blend * 1.35;
-            if (local.x + local.y < corner) {
-                let nw = unpack_material(p_nw);
-                if (w == n && w != mat && nw == w) {
-                    rgb = material_color(w, world) + effect_overlay(unpack_effect(p_nw), world);
-                }
-            }
-            if ((1.0 - local.x) + local.y < corner) {
-                let ne = unpack_material(p_ne);
-                if (e == n && e != mat && ne == e) {
-                    rgb = material_color(e, world) + effect_overlay(unpack_effect(p_ne), world);
-                }
-            }
-            if (local.x + (1.0 - local.y) < corner) {
-                let sw = unpack_material(p_sw);
-                if (w == s && w != mat && sw == w) {
-                    rgb = material_color(w, world) + effect_overlay(unpack_effect(p_sw), world);
-                }
-            }
-            if ((1.0 - local.x) + (1.0 - local.y) < corner) {
-                let se = unpack_material(p_se);
-                if (e == s && e != mat && se == e) {
-                    rgb = material_color(e, world) + effect_overlay(unpack_effect(p_se), world);
-                }
-            }
+            let aa = max(0.01, fwidth(local.x + local.y) * 1.5);
+
+            let valid_nw = select(0.0, 1.0, w == n && w != mat && nw == w);
+            let valid_ne = select(0.0, 1.0, e == n && e != mat && ne == e);
+            let valid_sw = select(0.0, 1.0, w == s && w != mat && sw == w);
+            let valid_se = select(0.0, 1.0, e == s && e != mat && se == e);
+
+            let mask_nw = (1.0 - smoothstep(-aa, aa, local.x + local.y - corner)) * valid_nw;
+            let mask_ne = (1.0 - smoothstep(-aa, aa, (1.0 - local.x) + local.y - corner)) * valid_ne;
+            let mask_sw = (1.0 - smoothstep(-aa, aa, local.x + (1.0 - local.y) - corner)) * valid_sw;
+            let mask_se = (1.0 - smoothstep(-aa, aa, (1.0 - local.x) + (1.0 - local.y) - corner)) * valid_se;
+
+            let rgb_nw = material_color(w, world) + effect_overlay(unpack_effect(p_nw), world);
+            let rgb_ne = material_color(e, world) + effect_overlay(unpack_effect(p_ne), world);
+            let rgb_sw = material_color(w, world) + effect_overlay(unpack_effect(p_sw), world);
+            let rgb_se = material_color(e, world) + effect_overlay(unpack_effect(p_se), world);
+
+            rgb = mix(rgb, rgb_nw, clamp(mask_nw, 0.0, 1.0));
+            rgb = mix(rgb, rgb_ne, clamp(mask_ne, 0.0, 1.0));
+            rgb = mix(rgb, rgb_sw, clamp(mask_sw, 0.0, 1.0));
+            rgb = mix(rgb, rgb_se, clamp(mask_se, 0.0, 1.0));
         }
 
         let line = max(

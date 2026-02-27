@@ -42,8 +42,8 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
 fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
     let tile = [world[0].floor() as i32, world[1].floor() as i32];
     let local = [world[0].fract(), world[1].fract()];
-    let mut mat = doc.terrain_at_i32(tile[0], tile[1]);
-    let mut eff = doc.effect_at_i32(tile[0], tile[1]);
+    let mat = doc.terrain_at_i32(tile[0], tile[1]);
+    let eff = doc.effect_at_i32(tile[0], tile[1]);
     let blend = 0.2;
 
     let mut c = material_rgb(mat, world);
@@ -54,69 +54,141 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
         let r = doc.terrain_at_i32(tile[0] + 1, tile[1]);
         let t = doc.terrain_at_i32(tile[0], tile[1] - 1);
         let b = doc.terrain_at_i32(tile[0], tile[1] + 1);
+        let nw = doc.terrain_at_i32(tile[0] - 1, tile[1] - 1);
+        let ne = doc.terrain_at_i32(tile[0] + 1, tile[1] - 1);
+        let sw = doc.terrain_at_i32(tile[0] - 1, tile[1] + 1);
+        let se = doc.terrain_at_i32(tile[0] + 1, tile[1] + 1);
         let wl = edge_weight(local[0], blend);
         let wr = edge_weight(1.0 - local[0], blend);
         let wt = edge_weight(local[1], blend);
         let wb = edge_weight(1.0 - local[1], blend);
+        let wnw = corner_weight(local[0], local[1], blend);
+        let wne = corner_weight(1.0 - local[0], local[1], blend);
+        let wsw = corner_weight(local[0], 1.0 - local[1], blend);
+        let wse = corner_weight(1.0 - local[0], 1.0 - local[1], blend);
 
         let mut sum = c;
         let mut wsum = 1.0_f32;
-        if l != mat {
-            let lc = apply_effect_cpu(
-                material_rgb(l, world),
-                doc.effect_at_i32(tile[0] - 1, tile[1]),
-                world,
-            );
-            sum[0] += lc[0] * wl;
-            sum[1] += lc[1] * wl;
-            sum[2] += lc[2] * wl;
-            wsum += wl;
-        }
-        if r != mat {
-            let rc = apply_effect_cpu(
-                material_rgb(r, world),
-                doc.effect_at_i32(tile[0] + 1, tile[1]),
-                world,
-            );
-            sum[0] += rc[0] * wr;
-            sum[1] += rc[1] * wr;
-            sum[2] += rc[2] * wr;
-            wsum += wr;
-        }
-        if t != mat {
-            let tc = apply_effect_cpu(
-                material_rgb(t, world),
-                doc.effect_at_i32(tile[0], tile[1] - 1),
-                world,
-            );
-            sum[0] += tc[0] * wt;
-            sum[1] += tc[1] * wt;
-            sum[2] += tc[2] * wt;
-            wsum += wt;
-        }
-        if b != mat {
-            let bc = apply_effect_cpu(
-                material_rgb(b, world),
-                doc.effect_at_i32(tile[0], tile[1] + 1),
-                world,
-            );
-            sum[0] += bc[0] * wb;
-            sum[1] += bc[1] * wb;
-            sum[2] += bc[2] * wb;
-            wsum += wb;
-        }
+        let lw = if l != mat { wl } else { 0.0 };
+        let rw = if r != mat { wr } else { 0.0 };
+        let tw = if t != mat { wt } else { 0.0 };
+        let bw = if b != mat { wb } else { 0.0 };
+        let nww = if nw != mat { wnw } else { 0.0 };
+        let neww = if ne != mat { wne } else { 0.0 };
+        let sww = if sw != mat { wsw } else { 0.0 };
+        let sew = if se != mat { wse } else { 0.0 };
+
+        let lc = apply_effect_cpu(
+            material_rgb(l, world),
+            doc.effect_at_i32(tile[0] - 1, tile[1]),
+            world,
+        );
+        let rc = apply_effect_cpu(
+            material_rgb(r, world),
+            doc.effect_at_i32(tile[0] + 1, tile[1]),
+            world,
+        );
+        let tc = apply_effect_cpu(
+            material_rgb(t, world),
+            doc.effect_at_i32(tile[0], tile[1] - 1),
+            world,
+        );
+        let bc = apply_effect_cpu(
+            material_rgb(b, world),
+            doc.effect_at_i32(tile[0], tile[1] + 1),
+            world,
+        );
+        let nwc = apply_effect_cpu(
+            material_rgb(nw, world),
+            doc.effect_at_i32(tile[0] - 1, tile[1] - 1),
+            world,
+        );
+        let nec = apply_effect_cpu(
+            material_rgb(ne, world),
+            doc.effect_at_i32(tile[0] + 1, tile[1] - 1),
+            world,
+        );
+        let swc = apply_effect_cpu(
+            material_rgb(sw, world),
+            doc.effect_at_i32(tile[0] - 1, tile[1] + 1),
+            world,
+        );
+        let sec = apply_effect_cpu(
+            material_rgb(se, world),
+            doc.effect_at_i32(tile[0] + 1, tile[1] + 1),
+            world,
+        );
+
+        sum[0] += lc[0] * lw + rc[0] * rw + tc[0] * tw + bc[0] * bw;
+        sum[1] += lc[1] * lw + rc[1] * rw + tc[1] * tw + bc[1] * bw;
+        sum[2] += lc[2] * lw + rc[2] * rw + tc[2] * tw + bc[2] * bw;
+        sum[0] += nwc[0] * nww + nec[0] * neww + swc[0] * sww + sec[0] * sew;
+        sum[1] += nwc[1] * nww + nec[1] * neww + swc[1] * sww + sec[1] * sew;
+        sum[2] += nwc[2] * nww + nec[2] * neww + swc[2] * sww + sec[2] * sew;
+        wsum += lw + rw + tw + bw + nww + neww + sww + sew;
+
         c = [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum];
 
         if mat.diagonal_blend() {
             let corner = blend * 1.35;
-            if local[0] + local[1] < corner {
-                let nw = doc.terrain_at_i32(tile[0] - 1, tile[1] - 1);
-                if l == t && l != mat && nw == l {
-                    mat = nw;
-                    eff = doc.effect_at_i32(tile[0] - 1, tile[1] - 1);
-                    c = apply_effect_cpu(material_rgb(mat, world), eff, world);
-                }
-            }
+            let aa = 0.02;
+            let nw_mask = if l == t && l != mat && nw == l {
+                1.0 - smoothstep(-aa, aa, local[0] + local[1] - corner)
+            } else {
+                0.0
+            };
+            let ne_mask = if r == t && r != mat && ne == r {
+                1.0 - smoothstep(-aa, aa, (1.0 - local[0]) + local[1] - corner)
+            } else {
+                0.0
+            };
+            let sw_mask = if l == b && l != mat && sw == l {
+                1.0 - smoothstep(-aa, aa, local[0] + (1.0 - local[1]) - corner)
+            } else {
+                0.0
+            };
+            let se_mask = if r == b && r != mat && se == r {
+                1.0 - smoothstep(-aa, aa, (1.0 - local[0]) + (1.0 - local[1]) - corner)
+            } else {
+                0.0
+            };
+
+            c = mix(
+                c,
+                apply_effect_cpu(
+                    material_rgb(l, world),
+                    doc.effect_at_i32(tile[0] - 1, tile[1] - 1),
+                    world,
+                ),
+                nw_mask,
+            );
+            c = mix(
+                c,
+                apply_effect_cpu(
+                    material_rgb(r, world),
+                    doc.effect_at_i32(tile[0] + 1, tile[1] - 1),
+                    world,
+                ),
+                ne_mask,
+            );
+            c = mix(
+                c,
+                apply_effect_cpu(
+                    material_rgb(l, world),
+                    doc.effect_at_i32(tile[0] - 1, tile[1] + 1),
+                    world,
+                ),
+                sw_mask,
+            );
+            c = mix(
+                c,
+                apply_effect_cpu(
+                    material_rgb(r, world),
+                    doc.effect_at_i32(tile[0] + 1, tile[1] + 1),
+                    world,
+                ),
+                se_mask,
+            );
         }
     }
 
@@ -129,6 +201,11 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
 
 fn edge_weight(distance: f32, blend: f32) -> f32 {
     1.0 - smoothstep(0.0, blend, distance)
+}
+
+fn corner_weight(dx: f32, dy: f32, blend: f32) -> f32 {
+    let radius = (blend * std::f32::consts::SQRT_2).max(0.0001);
+    1.0 - smoothstep(0.0, radius, (dx * dx + dy * dy).sqrt())
 }
 
 fn apply_effect_cpu(mut c: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
@@ -296,4 +373,89 @@ fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
         a[1] + (b[1] - a[1]) * t,
         a[2] + (b[2] - a[2]) * t,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::MaterialKind;
+
+    fn render_hash(doc: &MapDocument) -> u64 {
+        let w = doc.width * doc.tile_px;
+        let h = doc.height * doc.tile_px;
+        let mut hash = 1469598103934665603u64;
+        for py in 0..h {
+            for px in 0..w {
+                let world = [
+                    px as f32 / doc.tile_px as f32,
+                    py as f32 / doc.tile_px as f32,
+                ];
+                let rgb = shaded_world(doc, world);
+                for b in rgb {
+                    hash ^= b as u64;
+                    hash = hash.wrapping_mul(1099511628211);
+                }
+            }
+        }
+        hash
+    }
+
+    fn set(doc: &mut MapDocument, x: u32, y: u32, mat: MaterialKind) {
+        let idx = doc.idx(x, y);
+        doc.terrain[idx] = mat;
+    }
+
+    fn scene_l_shape() -> MapDocument {
+        let mut doc = MapDocument::new(6, 6);
+        doc.tile_px = 16;
+        for y in 1..5 {
+            set(&mut doc, 1, y, MaterialKind::Path);
+        }
+        for x in 1..5 {
+            set(&mut doc, x, 4, MaterialKind::Path);
+        }
+        doc
+    }
+
+    fn scene_checker_corners() -> MapDocument {
+        let mut doc = MapDocument::new(6, 6);
+        doc.tile_px = 16;
+        for y in 1..5 {
+            for x in 1..5 {
+                if (x + y) % 2 == 0 {
+                    set(&mut doc, x, y, MaterialKind::Wall);
+                }
+            }
+        }
+        doc
+    }
+
+    fn scene_t_junction() -> MapDocument {
+        let mut doc = MapDocument::new(7, 7);
+        doc.tile_px = 16;
+        for x in 1..6 {
+            set(&mut doc, x, 2, MaterialKind::Path);
+        }
+        for y in 2..6 {
+            set(&mut doc, 3, y, MaterialKind::Path);
+        }
+        doc
+    }
+
+    #[test]
+    fn visual_regression_scene_hashes() {
+        let l_shape = render_hash(&scene_l_shape());
+        let checker = render_hash(&scene_checker_corners());
+        let t_junction = render_hash(&scene_t_junction());
+
+        assert_eq!(
+            (l_shape, checker, t_junction),
+            (
+                1136231827263758256,
+                17523718721770390843,
+                14940186450352967539
+            ),
+            "visual regression hash mismatch"
+        );
+    }
 }
