@@ -3,6 +3,16 @@ use anyhow::{Context, Result};
 use image::{ImageBuffer, Rgba};
 use std::{fs, path::Path};
 
+const WALL_BLOCK_COLS: f32 = 3.0;
+const WALL_BLOCK_ROWS: f32 = 2.0;
+const WALL_SEAM_WIDTH: f32 = 0.06;
+const WALL_FRAME_THICKNESS: f32 = 0.10;
+const WALL_DOOR_WIDTH: f32 = 0.46;
+const WALL_DOOR_HEIGHT: f32 = 0.78;
+const WALL_WINDOW_WIDTH: f32 = 0.56;
+const WALL_WINDOW_HEIGHT: f32 = 0.42;
+const WALL_MULLION_THICKNESS: f32 = 0.05;
+
 pub fn save_map(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
     let json = serde_json::to_string_pretty(doc)?;
     fs::write(path.as_ref(), json)
@@ -205,6 +215,12 @@ fn effect_overlay_cpu(effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
 }
 
 fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
+    let tile_local = [p[0].fract(), p[1].fract()];
+    let block_grid = [
+        tile_local[0] * WALL_BLOCK_COLS,
+        tile_local[1] * WALL_BLOCK_ROWS,
+    ];
+    let block_id = [block_grid[0].floor(), block_grid[1].floor()];
     let n1 = fbm(p[0] * 2.7, p[1] * 2.7, 4);
     let n2 = fbm(p[0] * 6.4 + 11.0, p[1] * 6.4 - 3.0, 3);
     match mat {
@@ -250,28 +266,116 @@ fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
             tint([126.0, 112.0, 91.0], 0.82 + chip)
         }
         MaterialKind::Wall => {
-            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            let seam = wall_block_mask(tile_local);
+            let block_seed = hash2(
+                (p[0].floor() * 11.0 + block_id[0] * 3.0) as i32,
+                (p[1].floor() * 11.0 + block_id[1] * 3.0) as i32,
+                33,
+            );
             mix(
-                tint([136.0, 143.0, 150.0], 0.82 + n1 * 0.10),
+                tint(
+                    [136.0, 143.0, 150.0],
+                    0.82 + n1 * 0.10 + (block_seed - 0.5) * 0.10,
+                ),
                 [95.0, 99.0, 102.0],
-                seam,
+                seam * 0.95,
             )
         }
         MaterialKind::WallDoor => {
-            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            let seam = wall_block_mask(tile_local);
+            let stone = mix(
+                tint([135.0, 143.0, 153.0], 0.82 + n1 * 0.09),
+                [92.0, 95.0, 99.0],
+                seam * 0.9,
+            );
+
+            let opening_min = [
+                0.5 - WALL_DOOR_WIDTH * 0.5,
+                1.0 - WALL_DOOR_HEIGHT + WALL_FRAME_THICKNESS,
+            ];
+            let opening_max = [0.5 + WALL_DOOR_WIDTH * 0.5, 1.0 - WALL_FRAME_THICKNESS];
+            let frame_min = [
+                opening_min[0] - WALL_FRAME_THICKNESS,
+                opening_min[1] - WALL_FRAME_THICKNESS,
+            ];
+            let frame_max = [opening_max[0] + WALL_FRAME_THICKNESS, 1.0];
+
+            let opening = rect_mask(tile_local, opening_min, opening_max);
+            let frame = (rect_mask(tile_local, frame_min, frame_max) - opening).max(0.0);
+            let with_frame = mix(stone, [160.0, 167.0, 173.0], frame);
             mix(
-                tint([126.0, 88.0, 55.0], 0.86 + n1 * 0.10),
-                [150.0, 156.0, 160.0],
-                seam,
+                with_frame,
+                tint([64.0, 38.0, 21.0], 0.78 + n2 * 0.12),
+                opening,
             )
         }
         MaterialKind::WallWindow => {
-            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
-            mix(
-                tint([96.0, 123.0, 152.0], 0.86 + n1 * 0.10),
-                [156.0, 162.0, 166.0],
-                seam,
-            )
+            let seam = wall_block_mask(tile_local);
+            let wall = mix(
+                tint([135.0, 143.0, 153.0], 0.83 + n1 * 0.09),
+                [92.0, 95.0, 99.0],
+                seam * 0.9,
+            );
+
+            let outer_min = [
+                0.5 - WALL_WINDOW_WIDTH * 0.5,
+                0.36 - WALL_WINDOW_HEIGHT * 0.5,
+            ];
+            let outer_max = [
+                0.5 + WALL_WINDOW_WIDTH * 0.5,
+                0.36 + WALL_WINDOW_HEIGHT * 0.5,
+            ];
+            let inner_min = [
+                outer_min[0] + WALL_FRAME_THICKNESS,
+                outer_min[1] + WALL_FRAME_THICKNESS,
+            ];
+            let inner_max = [
+                outer_max[0] - WALL_FRAME_THICKNESS,
+                outer_max[1] - WALL_FRAME_THICKNESS,
+            ];
+            let inner_size = [inner_max[0] - inner_min[0], inner_max[1] - inner_min[1]];
+
+            let window_outer = rect_mask(tile_local, outer_min, outer_max);
+            let glass_area = rect_mask(tile_local, inner_min, inner_max);
+            let frame = (window_outer - glass_area).max(0.0);
+
+            let v_mid = inner_min[0] + inner_size[0] * 0.5;
+            let h_mid = inner_min[1] + inner_size[1] * 0.5;
+            let v_bar = rect_mask(
+                tile_local,
+                [v_mid - WALL_MULLION_THICKNESS, inner_min[1]],
+                [v_mid + WALL_MULLION_THICKNESS, inner_max[1]],
+            );
+            let h_bar = rect_mask(
+                tile_local,
+                [inner_min[0], h_mid - WALL_MULLION_THICKNESS],
+                [inner_max[0], h_mid + WALL_MULLION_THICKNESS],
+            );
+            let mullion = v_bar.max(h_bar) * glass_area;
+
+            let pane_seed = hash2(
+                (p[0].floor() * 7.0 + block_id[0]) as i32,
+                (p[1].floor() * 7.0 + block_id[1]) as i32,
+                71,
+            );
+            let glass = tint([84.0, 128.0, 168.0], 0.84 + pane_seed * 0.16);
+            let highlight = rect_mask(
+                tile_local,
+                [inner_min[0] + 0.03, inner_min[1] + 0.03],
+                [
+                    inner_min[0] + inner_size[0] * 0.35,
+                    inner_min[1] + inner_size[1] * 0.26,
+                ],
+            ) * glass_area;
+
+            let mut color = mix(wall, [162.0, 168.0, 174.0], frame);
+            color = mix(color, glass, glass_area);
+            color = mix(color, [156.0, 162.0, 168.0], mullion);
+            [
+                color[0] + 30.0 * highlight,
+                color[1] + 36.0 * highlight,
+                color[2] + 42.0 * highlight,
+            ]
         }
         MaterialKind::FloorWood => {
             let seam = topdown_grid(p, 3.4, 1.0, 0.06);
@@ -282,6 +386,22 @@ fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
             )
         }
     }
+}
+
+fn rect_mask(p: [f32; 2], min_p: [f32; 2], max_p: [f32; 2]) -> f32 {
+    if p[0] >= min_p[0] && p[0] <= max_p[0] && p[1] >= min_p[1] && p[1] <= max_p[1] {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+fn wall_block_mask(tile_local: [f32; 2]) -> f32 {
+    let fx = (tile_local[0] * WALL_BLOCK_COLS).fract();
+    let fy = (tile_local[1] * WALL_BLOCK_ROWS).fract();
+    let gx = 1.0 - smoothstep(0.0, WALL_SEAM_WIDTH, fx.min(1.0 - fx));
+    let gy = 1.0 - smoothstep(0.0, WALL_SEAM_WIDTH, fy.min(1.0 - fy));
+    gx.max(gy)
 }
 
 fn topdown_grid(p: [f32; 2], sx: f32, sy: f32, width: f32) -> f32 {
