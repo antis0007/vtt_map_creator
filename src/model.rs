@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+use crate::blend_rules;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[repr(u8)]
 pub enum MaterialKind {
@@ -53,21 +55,32 @@ impl MaterialKind {
     }
 
     pub fn blends(self) -> bool {
-        matches!(
-            self,
-            Self::Dirt
-                | Self::Grass
-                | Self::Sand
-                | Self::Water
-                | Self::Lava
-                | Self::Gravel
-                | Self::Path
-                | Self::Wall
-        )
+        blend_rules::material_blends(self)
     }
 
     pub fn diagonal_blend(self) -> bool {
-        matches!(self, Self::Path | Self::Wall)
+        blend_rules::material_diagonal(self)
+    }
+
+    pub fn blend_compatible(self, other: Self) -> bool {
+        if self == other || !self.blends() || !other.blends() {
+            return false;
+        }
+
+        if (self == Self::Grass && other.is_structural())
+            || (other == Self::Grass && self.is_structural())
+        {
+            return false;
+        }
+
+        true
+    }
+
+    fn is_structural(self) -> bool {
+        matches!(
+            self,
+            Self::Brick | Self::Wall | Self::WallDoor | Self::WallWindow | Self::FloorWood
+        )
     }
 }
 
@@ -206,6 +219,14 @@ impl MapDocument {
             self.terrain[self.idx(x as u32, y as u32)]
         } else {
             MaterialKind::Dirt
+        }
+    }
+
+    pub fn terrain_at_i32_checked(&self, x: i32, y: i32) -> Option<MaterialKind> {
+        if self.contains_i32(x, y) {
+            Some(self.terrain[self.idx(x as u32, y as u32)])
+        } else {
+            None
         }
     }
 

@@ -3,6 +3,16 @@ use anyhow::{Context, Result};
 use image::{ImageBuffer, Rgba};
 use std::{fs, path::Path};
 
+const WALL_BLOCK_COLS: f32 = 3.0;
+const WALL_BLOCK_ROWS: f32 = 2.0;
+const WALL_SEAM_WIDTH: f32 = 0.06;
+const WALL_FRAME_THICKNESS: f32 = 0.10;
+const WALL_DOOR_WIDTH: f32 = 0.46;
+const WALL_DOOR_HEIGHT: f32 = 0.78;
+const WALL_WINDOW_WIDTH: f32 = 0.56;
+const WALL_WINDOW_HEIGHT: f32 = 0.42;
+const WALL_MULLION_THICKNESS: f32 = 0.05;
+
 pub fn save_map(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
     let json = serde_json::to_string_pretty(doc)?;
     fs::write(path.as_ref(), json)
@@ -40,7 +50,7 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
 }
 
 fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
-    let tile = [world[0].floor() as i32, world[1].floor() as i32];
+    let base_tile = [world[0].floor() as i32, world[1].floor() as i32];
     let local = [world[0].fract(), world[1].fract()];
     let mat = doc.terrain_at_i32(tile[0], tile[1]);
     let eff = doc.effect_at_i32(tile[0], tile[1]);
@@ -190,8 +200,15 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
                 se_mask,
             );
         }
+
+        return [
+            c[0].clamp(0.0, 255.0) as u8,
+            c[1].clamp(0.0, 255.0) as u8,
+            c[2].clamp(0.0, 255.0) as u8,
+        ];
     }
 
+    let c = add3(material_rgb(mat, world), effect_overlay_cpu(eff, world));
     [
         c[0].clamp(0.0, 255.0) as u8,
         c[1].clamp(0.0, 255.0) as u8,
@@ -210,7 +227,7 @@ fn corner_weight(dx: f32, dy: f32, blend: f32) -> f32 {
 
 fn apply_effect_cpu(mut c: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
     match effect {
-        EffectKind::None => c,
+        EffectKind::None => [0.0, 0.0, 0.0],
         EffectKind::Wind => {
             let gust =
                 0.5 + 0.5 * (p[0] * 4.0 + p[1] * 1.5 + fbm(p[0] * 1.5, p[1] * 1.5, 5) * 4.0).sin();
