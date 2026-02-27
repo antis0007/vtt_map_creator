@@ -212,107 +212,136 @@ fn apply_effect_cpu(mut c: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3
     match effect {
         EffectKind::None => c,
         EffectKind::Wind => {
-            let gust = 0.5 + 0.5 * ((p[0] * 4.0 + p[1] * 1.3).sin() * (p[1] * 3.0).cos());
-            c[1] += 10.0 * gust;
+            let gust =
+                0.5 + 0.5 * (p[0] * 4.0 + p[1] * 1.5 + fbm(p[0] * 1.5, p[1] * 1.5, 5) * 4.0).sin();
+            c[0] += 7.65 * gust;
+            c[1] += 20.4 * gust;
+            c[2] += 5.1 * gust;
             c
         }
         EffectKind::Rain => {
-            let streak = ((p[0] * 12.0 + p[1] * 28.0).fract() * 2.0 - 1.0).abs();
-            let mask = (1.0 - smoothstep(0.65, 0.95, streak)) * 18.0;
-            c[0] += mask;
-            c[1] += mask;
-            c[2] += mask * 1.4;
+            let streak = ((p[0] * 14.0 + p[1] * 32.0).fract() * 2.0 - 1.0).abs();
+            let band = 1.0 - smoothstep(0.72, 0.96, streak);
+            c[0] += 20.4 * band;
+            c[1] += 22.95 * band;
+            c[2] += 33.15 * band;
             c
         }
     }
 }
 
 fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
-    let n1 = fbm(p[0] * 2.7, p[1] * 2.7, 4);
-    let n2 = fbm(p[0] * 6.4 + 11.0, p[1] * 6.4 - 3.0, 3);
+    let n1 = fbm(p[0] * 2.6, p[1] * 2.6, 5);
+    let n2 = fbm(p[0] * 6.2 + 17.0, p[1] * 6.2 - 9.0, 5);
     match mat {
-        MaterialKind::Dirt => tint([103.0, 78.0, 54.0], 0.75 + n1 * 0.18 + n2 * 0.07),
+        MaterialKind::Dirt => tint([102.0, 76.5, 53.55], 0.76 + n1 * 0.18 + n2 * 0.06),
         MaterialKind::Grass => {
-            let blade = (p[0] * 11.0 + p[1] * 2.0 + n2 * 2.0).sin().abs();
-            tint([79.0, 129.0, 60.0], 0.78 + n1 * 0.14 + blade * 0.10)
+            let bands = 0.5 + 0.5 * (p[0] * 14.0 + fbm(p[0] * 2.5, p[1] * 2.5, 5) * 3.0).sin();
+            let blades = 0.5 + 0.5 * (p[0] * 16.0 + p[1] * 3.0 + n2 * 5.0).sin();
+            let mut c = tint(
+                [76.5, 127.5, 58.65],
+                0.72 + n1 * 0.12 + bands * 0.10 + blades * 0.08,
+            );
+            c[0] += 2.55;
+            c[1] += 7.65;
+            c
         }
         MaterialKind::Sand => {
-            let ripple = 0.5 + 0.5 * (p[0] * 9.0 + p[1] * 1.1 + n1 * 2.0).sin();
-            tint([194.0, 176.0, 121.0], 0.82 + n1 * 0.10 + ripple * 0.08)
+            let ripples = 0.5 + 0.5 * (p[0] * 11.0 + p[1] * 1.2 + n1 * 4.0).sin();
+            tint([198.9, 178.5, 122.4], 0.82 + n2 * 0.08 + ripples * 0.08)
         }
         MaterialKind::Water => {
-            let wave = 0.5 + 0.5 * ((p[0] * 7.5 + n1 * 3.5).sin() + (p[1] * 5.0).cos()) * 0.5;
-            let c = tint([35.0, 94.0, 148.0], 0.78 + wave * 0.25);
-            [c[0], c[1] + 12.0, c[2] + 18.0]
+            let wave =
+                0.5 + 0.5 * ((p[0] + p[1]) * 2.4 + fbm(p[0] * 0.7, p[1] * 0.7, 5) * 4.0).sin();
+            let caustic = 0.5 + 0.5 * (p[0] * 18.0 - p[1] * 10.0 + n2 * 8.0).sin();
+            let mut c = tint([25.5, 81.6, 132.6], 0.76 + wave * 0.28);
+            c[0] += 7.65 * caustic;
+            c[1] += 22.95 * caustic;
+            c[2] += 33.15 * caustic;
+            c
         }
         MaterialKind::Lava => {
-            let molten = (p[0] * 8.0 + n2 * 4.0).sin() * (p[1] * 7.0 - n1 * 2.0).cos();
-            let glow = 0.5 + 0.5 * molten;
-            let c = tint([165.0, 55.0, 18.0], 0.72 + glow * 0.35);
-            [c[0] + 30.0 * glow, c[1] + 18.0 * glow, c[2]]
+            let molten = 0.5 + 0.5 * (p[0] * 9.0 + n1 * 8.0).sin() * (p[1] * 7.0 - n2 * 6.0).cos();
+            let mut c = tint([147.9, 40.8, 10.2], 0.74 + molten * 0.30);
+            c[0] += 56.1 * molten;
+            c[1] += 25.5 * molten;
+            c
         }
         MaterialKind::Gravel => {
-            let pebble = hash2((p[0] * 5.0) as i32, (p[1] * 5.0) as i32, 9);
-            let c = tint([118.0, 118.0, 114.0], 0.82 + n1 * 0.08);
+            let grain = hash2((p[0] * 7.0).floor() as i32, (p[1] * 7.0).floor() as i32, 9);
+            let c = tint([122.4, 122.4, 117.3], 0.82 + n1 * 0.08);
             [
-                c[0] + pebble * 18.0,
-                c[1] + pebble * 18.0,
-                c[2] + pebble * 18.0,
+                c[0] + grain * 20.4,
+                c[1] + grain * 20.4,
+                c[2] + grain * 20.4,
             ]
         }
         MaterialKind::Brick => {
-            let seam = topdown_grid(p, 2.0, 2.0, 0.06);
+            let seam = brick_topdown_mask([p[0] + n1 * 0.02, p[1] + n2 * 0.02]);
             mix(
-                tint([138.0, 62.0, 48.0], 0.82 + n1 * 0.10),
-                [181.0, 172.0, 159.0],
-                seam,
+                tint([124.95, 56.1, 40.8], 0.86 + n1 * 0.12),
+                [181.05, 168.3, 153.0],
+                seam * 0.9,
             )
         }
         MaterialKind::Path => {
-            let chip = hash2((p[0] * 4.0) as i32, (p[1] * 4.0) as i32, 21) * 0.20 + n1 * 0.10;
-            tint([126.0, 112.0, 91.0], 0.82 + chip)
+            let chips = hash2((p[0] * 5.0).floor() as i32, (p[1] * 5.0).floor() as i32, 21);
+            tint([127.5, 109.65, 84.15], 0.86 + n1 * 0.08 + chips * 0.08)
         }
         MaterialKind::Wall => {
-            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            let seam = stone_block_mask([p[0] + n1 * 0.04, p[1] + n2 * 0.04]);
             mix(
-                tint([136.0, 143.0, 150.0], 0.82 + n1 * 0.10),
-                [95.0, 99.0, 102.0],
-                seam,
+                tint([137.7, 145.35, 153.0], 0.84 + n1 * 0.10),
+                [94.35, 96.9, 99.45],
+                seam * 0.95,
             )
         }
         MaterialKind::WallDoor => {
-            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            let seam = stone_block_mask(p);
             mix(
-                tint([126.0, 88.0, 55.0], 0.86 + n1 * 0.10),
-                [150.0, 156.0, 160.0],
-                seam,
+                tint([112.2, 76.5, 43.35], 0.9 + n1 * 0.08),
+                [147.9, 153.0, 158.1],
+                seam * 0.8,
             )
         }
         MaterialKind::WallWindow => {
-            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            let seam = stone_block_mask(p);
             mix(
-                tint([96.0, 123.0, 152.0], 0.86 + n1 * 0.10),
-                [156.0, 162.0, 166.0],
-                seam,
+                tint([91.8, 127.5, 160.65], 0.9 + n1 * 0.10),
+                [158.1, 165.75, 170.85],
+                seam * 0.85,
             )
         }
         MaterialKind::FloorWood => {
-            let seam = topdown_grid(p, 3.4, 1.0, 0.06);
+            let seam = plank_mask([p[0] + n2 * 0.03, p[1]]);
             mix(
-                tint([152.0, 112.0, 72.0], 0.84 + n1 * 0.10),
-                [85.0, 61.0, 39.0],
-                seam,
+                tint([145.35, 102.0, 63.75], 0.86 + n1 * 0.12),
+                [76.5, 53.55, 33.15],
+                seam * 0.8,
             )
         }
     }
 }
 
-fn topdown_grid(p: [f32; 2], sx: f32, sy: f32, width: f32) -> f32 {
-    let fx = (p[0] * sx).fract();
-    let fy = (p[1] * sy).fract();
-    let gx: f32 = if fx.min(1.0 - fx) < width { 1.0 } else { 0.0 };
-    let gy: f32 = if fy.min(1.0 - fy) < width { 1.0 } else { 0.0 };
-    gx.max(gy)
+fn plank_mask(p: [f32; 2]) -> f32 {
+    let x = (p[0] * 3.5).fract();
+    1.0 - smoothstep(0.0, 0.06, x.min(1.0 - x))
+}
+
+fn stone_block_mask(p: [f32; 2]) -> f32 {
+    let gx = (p[0] * 2.0).fract();
+    let gy = (p[1] * 1.4).fract();
+    let seam_x = 1.0 - smoothstep(0.0, 0.07, gx.min(1.0 - gx));
+    let seam_y = 1.0 - smoothstep(0.0, 0.07, gy.min(1.0 - gy));
+    seam_x.max(seam_y)
+}
+
+fn brick_topdown_mask(p: [f32; 2]) -> f32 {
+    let lx = (p[0] * 2.0).fract();
+    let ly = (p[1] * 2.0).fract();
+    let seam_x = 1.0 - smoothstep(0.0, 0.06, lx.min(1.0 - lx));
+    let seam_y = 1.0 - smoothstep(0.0, 0.06, ly.min(1.0 - ly));
+    seam_x.max(seam_y)
 }
 
 fn fbm(mut x: f32, mut y: f32, octaves: usize) -> f32 {
@@ -451,9 +480,9 @@ mod tests {
         assert_eq!(
             (l_shape, checker, t_junction),
             (
-                1136231827263758256,
-                17523718721770390843,
-                14940186450352967539
+                8947265069355207326,
+                136982776539104141,
+                11580239904059965943
             ),
             "visual regression hash mismatch"
         );
