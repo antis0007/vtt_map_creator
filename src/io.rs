@@ -42,7 +42,9 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
 fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
     let tile = [world[0].floor() as i32, world[1].floor() as i32];
     let local = [world[0].fract(), world[1].fract()];
-    let mut mat = doc.terrain_at_i32(tile[0], tile[1]);
+    let mut mat = doc
+        .terrain_at_i32_checked(tile[0], tile[1])
+        .unwrap_or(MaterialKind::Dirt);
     let mut eff = doc.effect_at_i32(tile[0], tile[1]);
     let blend = 0.2;
 
@@ -50,10 +52,10 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
     c = apply_effect_cpu(c, eff, world);
 
     if mat.blends() {
-        let l = doc.terrain_at_i32(tile[0] - 1, tile[1]);
-        let r = doc.terrain_at_i32(tile[0] + 1, tile[1]);
-        let t = doc.terrain_at_i32(tile[0], tile[1] - 1);
-        let b = doc.terrain_at_i32(tile[0], tile[1] + 1);
+        let l = doc.terrain_at_i32_checked(tile[0] - 1, tile[1]);
+        let r = doc.terrain_at_i32_checked(tile[0] + 1, tile[1]);
+        let t = doc.terrain_at_i32_checked(tile[0], tile[1] - 1);
+        let b = doc.terrain_at_i32_checked(tile[0], tile[1] + 1);
         let wl = edge_weight(local[0], blend);
         let wr = edge_weight(1.0 - local[0], blend);
         let wt = edge_weight(local[1], blend);
@@ -61,9 +63,9 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
 
         let mut sum = c;
         let mut wsum = 1.0_f32;
-        if l != mat {
+        if let Some(l_mat) = l.filter(|&other| mat.blend_compatible(other)) {
             let lc = apply_effect_cpu(
-                material_rgb(l, world),
+                material_rgb(l_mat, world),
                 doc.effect_at_i32(tile[0] - 1, tile[1]),
                 world,
             );
@@ -72,9 +74,9 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
             sum[2] += lc[2] * wl;
             wsum += wl;
         }
-        if r != mat {
+        if let Some(r_mat) = r.filter(|&other| mat.blend_compatible(other)) {
             let rc = apply_effect_cpu(
-                material_rgb(r, world),
+                material_rgb(r_mat, world),
                 doc.effect_at_i32(tile[0] + 1, tile[1]),
                 world,
             );
@@ -83,9 +85,9 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
             sum[2] += rc[2] * wr;
             wsum += wr;
         }
-        if t != mat {
+        if let Some(t_mat) = t.filter(|&other| mat.blend_compatible(other)) {
             let tc = apply_effect_cpu(
-                material_rgb(t, world),
+                material_rgb(t_mat, world),
                 doc.effect_at_i32(tile[0], tile[1] - 1),
                 world,
             );
@@ -94,9 +96,9 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
             sum[2] += tc[2] * wt;
             wsum += wt;
         }
-        if b != mat {
+        if let Some(b_mat) = b.filter(|&other| mat.blend_compatible(other)) {
             let bc = apply_effect_cpu(
-                material_rgb(b, world),
+                material_rgb(b_mat, world),
                 doc.effect_at_i32(tile[0], tile[1] + 1),
                 world,
             );
@@ -110,11 +112,13 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
         if mat.diagonal_blend() {
             let corner = blend * 1.35;
             if local[0] + local[1] < corner {
-                let nw = doc.terrain_at_i32(tile[0] - 1, tile[1] - 1);
-                if l == t && l != mat && nw == l {
-                    mat = nw;
-                    eff = doc.effect_at_i32(tile[0] - 1, tile[1] - 1);
-                    c = apply_effect_cpu(material_rgb(mat, world), eff, world);
+                let nw = doc.terrain_at_i32_checked(tile[0] - 1, tile[1] - 1);
+                if let (Some(l_mat), Some(t_mat), Some(nw_mat)) = (l, t, nw) {
+                    if l_mat == t_mat && nw_mat == l_mat && mat.blend_compatible(l_mat) {
+                        mat = nw_mat;
+                        eff = doc.effect_at_i32(tile[0] - 1, tile[1] - 1);
+                        c = apply_effect_cpu(material_rgb(mat, world), eff, world);
+                    }
                 }
             }
         }
