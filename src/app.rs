@@ -1,7 +1,7 @@
 use crate::{
     gpu_renderer::GpuMapRenderer,
     io,
-    model::{EditLayer, EffectKind, MapDocument, MaterialKind, Selection, ToolKind},
+    model::{EditLayer, EffectKind, MapDocument, MaterialKind, Selection, SplitKind, ToolKind},
 };
 use eframe::egui::{self, pos2, vec2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind};
 use std::time::Instant;
@@ -12,7 +12,10 @@ pub struct AtlasForgeApp {
     layer: EditLayer,
     tool: ToolKind,
     material: MaterialKind,
+    secondary_material: MaterialKind,
     effect: EffectKind,
+    split_brush: bool,
+    split_kind: SplitKind,
     brush_radius: u32,
     blend_strength: f32,
     grid_opacity: f32,
@@ -29,6 +32,7 @@ pub struct AtlasForgeApp {
     new_h: u32,
     status: String,
     started_at: Instant,
+    shift_held: bool,
 }
 
 impl AtlasForgeApp {
@@ -45,7 +49,10 @@ impl AtlasForgeApp {
             layer: EditLayer::Base,
             tool: ToolKind::Brush,
             material: MaterialKind::Grass,
+            secondary_material: MaterialKind::Path,
             effect: EffectKind::Wind,
+            split_brush: false,
+            split_kind: SplitKind::DiagNWSE,
             brush_radius: 1,
             blend_strength: 0.2,
             grid_opacity: 0.08,
@@ -62,6 +69,7 @@ impl AtlasForgeApp {
             new_h: 64,
             status: "Ready".into(),
             started_at: Instant::now(),
+            shift_held: false,
         }
     }
 
@@ -149,6 +157,33 @@ impl AtlasForgeApp {
                     }
                 });
                 ui.label("Tip: paint on the Effects layer, or erase effects directly.");
+
+                ui.separator();
+                ui.heading("Tile Split");
+                ui.checkbox(&mut self.split_brush, "Enable split paint on Terrain layer");
+                ui.label("Applies only to split-capable materials (Path/Wall).");
+                ui.label("Hold Shift while painting to temporarily enable split.");
+                egui::ComboBox::from_label("Split diagonal")
+                    .selected_text(self.split_kind.label())
+                    .show_ui(ui, |ui| {
+                        for kind in SplitKind::ALL {
+                            if kind == SplitKind::None {
+                                continue;
+                            }
+                            ui.selectable_value(&mut self.split_kind, kind, kind.label());
+                        }
+                    });
+                egui::ComboBox::from_label("Secondary material")
+                    .selected_text(self.secondary_material.label())
+                    .show_ui(ui, |ui| {
+                        for material in MaterialKind::ALL {
+                            ui.selectable_value(
+                                &mut self.secondary_material,
+                                material,
+                                material.label(),
+                            );
+                        }
+                    });
 
                 ui.separator();
                 ui.heading("Render");
@@ -320,6 +355,7 @@ impl AtlasForgeApp {
 
     fn apply_brush(&mut self, tile: [u32; 2], erase: bool) {
         let effective_radius = self.brush_radius.saturating_sub(1);
+        let split_mode = self.active_split_mode();
         if erase {
             let r = effective_radius as i32;
             let [cx, cy] = tile;
@@ -340,9 +376,28 @@ impl AtlasForgeApp {
                 self.layer,
                 self.material,
                 self.effect,
+                split_mode,
+                self.secondary_material,
             );
         }
         self.gpu_dirty = true;
+    }
+
+    fn active_split_mode(&self) -> SplitKind {
+        if self.layer != EditLayer::Base {
+            return SplitKind::None;
+        }
+        if !(self.split_brush || self.shift_held) {
+            return SplitKind::None;
+        }
+        if MapDocument::split_allowed(self.material)
+            && MapDocument::split_allowed(self.secondary_material)
+            && self.material != self.secondary_material
+        {
+            self.split_kind
+        } else {
+            SplitKind::None
+        }
     }
 
     fn begin_primary_action(&mut self, tile: Option<[u32; 2]>) {
@@ -356,7 +411,14 @@ impl AtlasForgeApp {
             ToolKind::Brush => self.apply_brush(tile, false),
             ToolKind::Erase => self.apply_brush(tile, true),
             ToolKind::Fill => {
-                self.doc.fill(tile, self.layer, self.material, self.effect);
+                self.doc.fill(
+                    tile,
+                    self.layer,
+                    self.material,
+                    self.effect,
+                    self.active_split_mode(),
+                    self.secondary_material,
+                );
                 self.gpu_dirty = true;
                 self.primary_drag_active = false;
                 self.drag_anchor = None;
@@ -395,8 +457,15 @@ impl AtlasForgeApp {
         if let (Some(a), Some(b)) = (self.drag_anchor, self.drag_current) {
             match self.tool {
                 ToolKind::Rect => {
-                    self.doc
-                        .paint_rect(a, b, self.layer, self.material, self.effect);
+                    self.doc.paint_rect(
+                        a,
+                        b,
+                        self.layer,
+                        self.material,
+                        self.effect,
+                        self.active_split_mode(),
+                        self.secondary_material,
+                    );
                     self.gpu_dirty = true;
                 }
                 ToolKind::Select => {
@@ -527,11 +596,22 @@ impl AtlasForgeApp {
                 self.tool.label(),
                 self.layer.label()
             );
+            if self.layer == EditLayer::Base && self.active_split_mode() == SplitKind::None {
+                if (self.split_brush || self.shift_held)
+                    && (!MapDocument::split_allowed(self.material)
+                        || !MapDocument::split_allowed(self.secondary_material)
+                        || self.material == self.secondary_material)
+                {
+                    self.status
+                        .push_str(" | Split requires distinct Path/Wall materials");
+                }
+            }
         }
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         ctx.input(|i| {
+            self.shift_held = i.modifiers.shift;
             if i.key_pressed(egui::Key::B) {
                 self.tool = ToolKind::Brush;
             }

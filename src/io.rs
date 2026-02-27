@@ -1,4 +1,4 @@
-use crate::model::{EffectKind, MapDocument, MaterialKind};
+use crate::model::{EffectKind, MapDocument, MaterialKind, SplitKind};
 use anyhow::{Context, Result};
 use image::{ImageBuffer, Rgba};
 use std::{fs, path::Path};
@@ -13,8 +13,9 @@ pub fn save_map(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
 pub fn load_map(path: impl AsRef<Path>) -> Result<MapDocument> {
     let text = fs::read_to_string(path.as_ref())
         .with_context(|| format!("failed to read {}", path.as_ref().display()))?;
-    let doc: MapDocument = serde_json::from_str(&text)
+    let mut doc: MapDocument = serde_json::from_str(&text)
         .with_context(|| format!("failed to parse {}", path.as_ref().display()))?;
+    doc.normalize_layers();
     Ok(doc)
 }
 
@@ -42,11 +43,11 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
 fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
     let tile = [world[0].floor() as i32, world[1].floor() as i32];
     let local = [world[0].fract(), world[1].fract()];
-    let mut mat = doc.terrain_at_i32(tile[0], tile[1]);
-    let mut eff = doc.effect_at_i32(tile[0], tile[1]);
+    let mat = doc.terrain_at_i32(tile[0], tile[1]);
+    let eff = doc.effect_at_i32(tile[0], tile[1]);
     let blend = 0.2;
 
-    let mut c = material_rgb(mat, world);
+    let mut c = split_blend_color(doc, tile, local, world, blend);
     c = apply_effect_cpu(c, eff, world);
 
     if mat.blends() {
@@ -106,18 +107,6 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
             wsum += wb;
         }
         c = [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum];
-
-        if mat.diagonal_blend() {
-            let corner = blend * 1.35;
-            if local[0] + local[1] < corner {
-                let nw = doc.terrain_at_i32(tile[0] - 1, tile[1] - 1);
-                if l == t && l != mat && nw == l {
-                    mat = nw;
-                    eff = doc.effect_at_i32(tile[0] - 1, tile[1] - 1);
-                    c = apply_effect_cpu(material_rgb(mat, world), eff, world);
-                }
-            }
-        }
     }
 
     [
@@ -125,6 +114,34 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
         c[1].clamp(0.0, 255.0) as u8,
         c[2].clamp(0.0, 255.0) as u8,
     ]
+}
+
+fn split_blend_color(
+    doc: &MapDocument,
+    tile: [i32; 2],
+    local: [f32; 2],
+    world: [f32; 2],
+    blend_strength: f32,
+) -> [f32; 3] {
+    let primary = doc.terrain_at_i32(tile[0], tile[1]);
+    let split = doc.split_at_i32(tile[0], tile[1]);
+    let secondary = doc.secondary_at_i32(tile[0], tile[1]);
+    if split == SplitKind::None || primary == secondary {
+        return material_rgb(primary, world);
+    }
+
+    let d = match split {
+        SplitKind::None => 0.0,
+        SplitKind::DiagNWSE => local[1] - local[0],
+        SplitKind::DiagNESW => local[0] + local[1] - 1.0,
+    };
+    let aa = 0.01 + blend_strength * 0.25;
+    let t = smoothstep(-aa, aa, d);
+    mix(
+        material_rgb(primary, world),
+        material_rgb(secondary, world),
+        t,
+    )
 }
 
 fn edge_weight(distance: f32, blend: f32) -> f32 {

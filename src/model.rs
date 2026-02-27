@@ -80,6 +80,27 @@ pub enum EffectKind {
     Rain = 2,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[repr(u8)]
+pub enum SplitKind {
+    #[default]
+    None = 0,
+    DiagNWSE = 1,
+    DiagNESW = 2,
+}
+
+impl SplitKind {
+    pub const ALL: [Self; 3] = [Self::None, Self::DiagNWSE, Self::DiagNESW];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::DiagNWSE => "Diag ↘ (NW-SE)",
+            Self::DiagNESW => "Diag ↙ (NE-SW)",
+        }
+    }
+}
+
 impl EffectKind {
     pub const ALL: [Self; 3] = [Self::None, Self::Wind, Self::Rain];
 
@@ -170,6 +191,10 @@ pub struct MapDocument {
     pub tile_px: u32,
     pub terrain: Vec<MaterialKind>,
     pub effects: Vec<EffectKind>,
+    #[serde(default)]
+    pub split: Vec<SplitKind>,
+    #[serde(default)]
+    pub secondary_terrain: Vec<MaterialKind>,
 }
 
 impl MapDocument {
@@ -182,7 +207,17 @@ impl MapDocument {
             tile_px: 32,
             terrain: vec![MaterialKind::Grass; len],
             effects: vec![EffectKind::None; len],
+            split: vec![SplitKind::None; len],
+            secondary_terrain: vec![MaterialKind::Grass; len],
         }
+    }
+
+    pub fn normalize_layers(&mut self) {
+        let len = self.len();
+        self.terrain.resize(len, MaterialKind::Grass);
+        self.effects.resize(len, EffectKind::None);
+        self.split.resize(len, SplitKind::None);
+        self.secondary_terrain.resize(len, MaterialKind::Grass);
     }
 
     pub fn len(&self) -> usize {
@@ -217,12 +252,36 @@ impl MapDocument {
         }
     }
 
+    pub fn split_at_i32(&self, x: i32, y: i32) -> SplitKind {
+        if self.contains_i32(x, y) {
+            self.split[self.idx(x as u32, y as u32)]
+        } else {
+            SplitKind::None
+        }
+    }
+
+    pub fn secondary_at_i32(&self, x: i32, y: i32) -> MaterialKind {
+        if self.contains_i32(x, y) {
+            self.secondary_terrain[self.idx(x as u32, y as u32)]
+        } else {
+            MaterialKind::Dirt
+        }
+    }
+
     pub fn packed_tiles(&self) -> Vec<u32> {
         self.terrain
             .iter()
             .zip(&self.effects)
-            .map(|(&m, &e)| (m as u32) | ((e as u32) << 8))
+            .zip(&self.split)
+            .zip(&self.secondary_terrain)
+            .map(|(((&m, &e), &s), &secondary)| {
+                (m as u32) | ((e as u32) << 8) | ((s as u32) << 16) | ((secondary as u32) << 18)
+            })
             .collect()
+    }
+
+    pub fn split_allowed(material: MaterialKind) -> bool {
+        material.diagonal_blend()
     }
 
     fn apply_one(
@@ -232,10 +291,24 @@ impl MapDocument {
         layer: EditLayer,
         material: MaterialKind,
         effect: EffectKind,
+        split: SplitKind,
+        secondary_material: MaterialKind,
     ) {
         let idx = self.idx(x, y);
         match layer {
-            EditLayer::Base => self.terrain[idx] = material,
+            EditLayer::Base => {
+                self.terrain[idx] = material;
+                if split != SplitKind::None
+                    && Self::split_allowed(material)
+                    && Self::split_allowed(secondary_material)
+                {
+                    self.split[idx] = split;
+                    self.secondary_terrain[idx] = secondary_material;
+                } else {
+                    self.split[idx] = SplitKind::None;
+                    self.secondary_terrain[idx] = material;
+                }
+            }
             EditLayer::Effect => self.effects[idx] = effect,
         }
     }
@@ -243,7 +316,11 @@ impl MapDocument {
     pub fn erase_one(&mut self, x: u32, y: u32, layer: EditLayer) {
         let idx = self.idx(x, y);
         match layer {
-            EditLayer::Base => self.terrain[idx] = MaterialKind::Dirt,
+            EditLayer::Base => {
+                self.terrain[idx] = MaterialKind::Dirt;
+                self.split[idx] = SplitKind::None;
+                self.secondary_terrain[idx] = MaterialKind::Dirt;
+            }
             EditLayer::Effect => self.effects[idx] = EffectKind::None,
         }
     }
@@ -255,6 +332,8 @@ impl MapDocument {
         layer: EditLayer,
         material: MaterialKind,
         effect: EffectKind,
+        split: SplitKind,
+        secondary_material: MaterialKind,
     ) {
         let [cx, cy] = center;
         let r = radius as i32;
@@ -264,7 +343,15 @@ impl MapDocument {
                 let dx = x - cx as i32;
                 let dy = y - cy as i32;
                 if dx * dx + dy * dy <= rr {
-                    self.apply_one(x as u32, y as u32, layer, material, effect);
+                    self.apply_one(
+                        x as u32,
+                        y as u32,
+                        layer,
+                        material,
+                        effect,
+                        split,
+                        secondary_material,
+                    );
                 }
             }
         }
@@ -277,6 +364,8 @@ impl MapDocument {
         layer: EditLayer,
         material: MaterialKind,
         effect: EffectKind,
+        split: SplitKind,
+        secondary_material: MaterialKind,
     ) {
         let min_x = a[0].min(b[0]);
         let max_x = a[0].max(b[0]);
@@ -284,7 +373,7 @@ impl MapDocument {
         let max_y = a[1].max(b[1]);
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                self.apply_one(x, y, layer, material, effect);
+                self.apply_one(x, y, layer, material, effect, split, secondary_material);
             }
         }
     }
@@ -307,13 +396,15 @@ impl MapDocument {
         layer: EditLayer,
         material: MaterialKind,
         effect: EffectKind,
+        split: SplitKind,
+        secondary_material: MaterialKind,
     ) {
         let [sx, sy] = start;
         let start_idx = self.idx(sx, sy);
         match layer {
             EditLayer::Base => {
                 let target = self.terrain[start_idx];
-                if target == material {
+                if target == material && split == SplitKind::None {
                     return;
                 }
                 let mut queue = VecDeque::from([(sx, sy)]);
@@ -322,7 +413,7 @@ impl MapDocument {
                     if self.terrain[idx] != target {
                         continue;
                     }
-                    self.terrain[idx] = material;
+                    self.apply_one(x, y, layer, material, effect, split, secondary_material);
                     if x > 0 {
                         queue.push_back((x - 1, y));
                     }

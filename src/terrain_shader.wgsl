@@ -28,12 +28,56 @@ fn unpack_effect(packed: u32) -> u32 {
     return (packed >> 8u) & 0xffu;
 }
 
+fn unpack_split(packed: u32) -> u32 {
+    return (packed >> 16u) & 0x3u;
+}
+
+fn unpack_secondary(packed: u32) -> u32 {
+    return (packed >> 18u) & 0xffu;
+}
+
 fn material_blends(material: u32) -> bool {
     return material <= 5u || material == 7u || material == 8u;
 }
 
 fn material_diagonal(material: u32) -> bool {
     return material == 7u || material == 8u;
+}
+
+fn split_blend_factor(local: vec2<f32>, split: u32, blend_strength: f32) -> f32 {
+    var d = 0.0;
+    if (split == 1u) {
+        d = local.y - local.x;
+    } else if (split == 2u) {
+        d = local.x + local.y - 1.0;
+    }
+    let aa = fwidth(d) * 1.5 + clamp(blend_strength, 0.0, 0.48) * 0.5 + 0.002;
+    return smoothstep(-aa, aa, d);
+}
+
+fn tile_material_mix(packed: u32, local: vec2<f32>, blend_strength: f32) -> vec2<f32> {
+    let primary = unpack_material(packed);
+    let split = unpack_split(packed);
+    let secondary = unpack_secondary(packed);
+    if (split == 0u || !material_diagonal(primary) || !material_diagonal(secondary) || primary == secondary) {
+        return vec2<f32>(f32(primary), 0.0);
+    }
+    let t = split_blend_factor(local, split, blend_strength);
+    return vec2<f32>(mix(f32(primary), f32(secondary), t), t);
+}
+
+fn tile_color(packed: u32, local: vec2<f32>, world: vec2<f32>, blend_strength: f32) -> vec3<f32> {
+    let primary = unpack_material(packed);
+    let split = unpack_split(packed);
+    let secondary = unpack_secondary(packed);
+    let eff = unpack_effect(packed);
+    if (split == 0u || !material_diagonal(primary) || !material_diagonal(secondary) || primary == secondary) {
+        return material_color(primary, world) + effect_overlay(eff, world);
+    }
+    let t = split_blend_factor(local, split, blend_strength);
+    let rgb_primary = material_color(primary, world);
+    let rgb_secondary = material_color(secondary, world);
+    return mix(rgb_primary, rgb_secondary, t) + effect_overlay(eff, world);
 }
 
 fn clamp_tile(p: vec2<i32>) -> vec2<u32> {
@@ -213,13 +257,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let p_e = tile_at(base_tile + vec2<i32>(1, 0));
     let p_n = tile_at(base_tile + vec2<i32>(0, -1));
     let p_s = tile_at(base_tile + vec2<i32>(0, 1));
-    let p_nw = tile_at(base_tile + vec2<i32>(-1, -1));
-    let p_ne = tile_at(base_tile + vec2<i32>(1, -1));
-    let p_sw = tile_at(base_tile + vec2<i32>(-1, 1));
-    let p_se = tile_at(base_tile + vec2<i32>(1, 1));
-
     var mat = unpack_material(p00);
-    var eff = unpack_effect(p00);
+    let center_mix = tile_material_mix(p00, local, g.blend_strength);
+    mat = u32(round(center_mix.x));
 
     let blend = clamp(g.blend_strength, 0.0, 0.48);
     if (blend > 0.0 && material_blends(mat)) {
@@ -234,59 +274,26 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let s = unpack_material(p_s);
 
         var wsum = 1.0;
-        var color_sum = material_color(mat, world);
-        var effect_sum = effect_overlay(eff, world);
+        var color_sum = tile_color(p00, local, world, g.blend_strength);
 
         if (w != mat) {
-            color_sum = color_sum + material_color(w, world) * edge_l;
-            effect_sum = effect_sum + effect_overlay(unpack_effect(p_w), world) * edge_l;
+            color_sum = color_sum + tile_color(p_w, local, world, g.blend_strength) * edge_l;
             wsum = wsum + edge_l;
         }
         if (e != mat) {
-            color_sum = color_sum + material_color(e, world) * edge_r;
-            effect_sum = effect_sum + effect_overlay(unpack_effect(p_e), world) * edge_r;
+            color_sum = color_sum + tile_color(p_e, local, world, g.blend_strength) * edge_r;
             wsum = wsum + edge_r;
         }
         if (n != mat) {
-            color_sum = color_sum + material_color(n, world) * edge_t;
-            effect_sum = effect_sum + effect_overlay(unpack_effect(p_n), world) * edge_t;
+            color_sum = color_sum + tile_color(p_n, local, world, g.blend_strength) * edge_t;
             wsum = wsum + edge_t;
         }
         if (s != mat) {
-            color_sum = color_sum + material_color(s, world) * edge_b;
-            effect_sum = effect_sum + effect_overlay(unpack_effect(p_s), world) * edge_b;
+            color_sum = color_sum + tile_color(p_s, local, world, g.blend_strength) * edge_b;
             wsum = wsum + edge_b;
         }
 
-        var rgb = (color_sum + effect_sum) / max(wsum, 0.0001);
-
-        if (material_diagonal(mat)) {
-            let corner = blend * 1.35;
-            if (local.x + local.y < corner) {
-                let nw = unpack_material(p_nw);
-                if (w == n && w != mat && nw == w) {
-                    rgb = material_color(w, world) + effect_overlay(unpack_effect(p_nw), world);
-                }
-            }
-            if ((1.0 - local.x) + local.y < corner) {
-                let ne = unpack_material(p_ne);
-                if (e == n && e != mat && ne == e) {
-                    rgb = material_color(e, world) + effect_overlay(unpack_effect(p_ne), world);
-                }
-            }
-            if (local.x + (1.0 - local.y) < corner) {
-                let sw = unpack_material(p_sw);
-                if (w == s && w != mat && sw == w) {
-                    rgb = material_color(w, world) + effect_overlay(unpack_effect(p_sw), world);
-                }
-            }
-            if ((1.0 - local.x) + (1.0 - local.y) < corner) {
-                let se = unpack_material(p_se);
-                if (e == s && e != mat && se == e) {
-                    rgb = material_color(e, world) + effect_overlay(unpack_effect(p_se), world);
-                }
-            }
-        }
+        var rgb = color_sum / max(wsum, 0.0001);
 
         let line = max(
             1.0 - smoothstep(0.0, 0.02, min(local.x, 1.0 - local.x)),
@@ -296,7 +303,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(rgb, 1.0);
     }
 
-    var rgb = material_color(mat, world) + effect_overlay(eff, world);
+    var rgb = tile_color(p00, local, world, g.blend_strength);
     let line = max(
         1.0 - smoothstep(0.0, 0.02, min(local.x, 1.0 - local.x)),
         1.0 - smoothstep(0.0, 0.02, min(local.y, 1.0 - local.y)),
