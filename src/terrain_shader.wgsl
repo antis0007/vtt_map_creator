@@ -4,8 +4,9 @@ struct Globals {
     view_origin: vec2<f32>,
     view_size: vec2<f32>,
     time: f32,
-    tile_px: f32,
-    _pad1: vec2<u32>,
+    blend_strength: f32,
+    grid_opacity: f32,
+    _pad1: f32,
 };
 
 @group(0) @binding(0)
@@ -181,43 +182,55 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let uv = clamp(in.uv, vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0));
+    let uv = vec2<f32>(clamp(in.uv.x, 0.0, 1.0), 1.0 - clamp(in.uv.y, 0.0, 1.0));
     let world = g.view_origin + uv * g.view_size;
     let base_tile = vec2<i32>(floor(world));
+    let local = fract(world);
+
+    let blend = clamp(g.blend_strength, 0.0, 0.48);
+    let edge0 = 0.5 - blend;
+    let edge1 = 0.5 + blend;
+    let wx = smoothstep(edge0, edge1, local.x);
+    let wy = smoothstep(edge0, edge1, local.y);
+
+    let diag_axis = (local.x + local.y) - 1.0;
+    let diag_mix = smoothstep(-blend, blend, diag_axis);
 
     var color_sum = vec3<f32>(0.0, 0.0, 0.0);
     var effect_sum = vec3<f32>(0.0, 0.0, 0.0);
-    var weight_sum = 0.0;
+    let p00 = tile_at(base_tile + vec2<i32>(0, 0));
+    let p10 = tile_at(base_tile + vec2<i32>(1, 0));
+    let p01 = tile_at(base_tile + vec2<i32>(0, 1));
+    let p11 = tile_at(base_tile + vec2<i32>(1, 1));
 
-    for (var oy = -1; oy <= 1; oy = oy + 1) {
-        for (var ox = -1; ox <= 1; ox = ox + 1) {
-            let tp = base_tile + vec2<i32>(ox, oy);
-            let packed = tile_at(tp);
-            let material = unpack_material(packed);
-            let effect = unpack_effect(packed);
-            let jitter = vec2<f32>(
-                hash21(vec2<f32>(vec2<i32>(tp)) + vec2<f32>(1.7, 9.2)) - 0.5,
-                hash21(vec2<f32>(vec2<i32>(tp)) + vec2<f32>(8.4, 2.1)) - 0.5,
-            ) * 0.18;
-            let center = vec2<f32>(vec2<i32>(tp)) + vec2<f32>(0.5, 0.5) + jitter;
-            let d = distance(world, center);
-            let w = exp(-3.6 * d * d);
-            color_sum = color_sum + material_color(material, world) * w;
-            effect_sum = effect_sum + effect_overlay(effect, world) * w;
-            weight_sum = weight_sum + w;
-        }
-    }
+    let w00 = (1.0 - wx) * (1.0 - wy);
+    let w10 = wx * (1.0 - wy);
+    let w01 = (1.0 - wx) * wy;
+    let w11 = wx * wy;
 
-    let inv = select(1.0, 1.0 / weight_sum, weight_sum > 0.0);
-    var rgb = color_sum * inv;
-    rgb = rgb + effect_sum * inv;
+    let d_bias = 0.16;
+    let w00d = w00 + (1.0 - diag_mix) * d_bias;
+    let w11d = w11 + diag_mix * d_bias;
+    let norm = max(w00d + w10 + w01 + w11d, 0.0001);
+
+    color_sum = color_sum + material_color(unpack_material(p00), world) * w00d;
+    color_sum = color_sum + material_color(unpack_material(p10), world) * w10;
+    color_sum = color_sum + material_color(unpack_material(p01), world) * w01;
+    color_sum = color_sum + material_color(unpack_material(p11), world) * w11d;
+
+    effect_sum = effect_sum + effect_overlay(unpack_effect(p00), world) * w00d;
+    effect_sum = effect_sum + effect_overlay(unpack_effect(p10), world) * w10;
+    effect_sum = effect_sum + effect_overlay(unpack_effect(p01), world) * w01;
+    effect_sum = effect_sum + effect_overlay(unpack_effect(p11), world) * w11d;
+
+    var rgb = (color_sum + effect_sum) / norm;
 
     let tile_local = fract(world);
     let line = max(
         1.0 - smoothstep(0.0, 0.02, min(tile_local.x, 1.0 - tile_local.x)),
         1.0 - smoothstep(0.0, 0.02, min(tile_local.y, 1.0 - tile_local.y)),
     );
-    rgb = mix(rgb, rgb * 0.82, line * 0.10);
+    rgb = mix(rgb, rgb * 0.82, line * clamp(g.grid_opacity, 0.0, 0.35));
 
     return vec4<f32>(rgb, 1.0);
 }
