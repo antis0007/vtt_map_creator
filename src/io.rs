@@ -29,8 +29,7 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
                 px as f32 / doc.tile_px as f32,
                 py as f32 / doc.tile_px as f32,
             ];
-            let tile = [world[0].floor() as i32, world[1].floor() as i32];
-            let color = shaded_world(doc, world, tile);
+            let color = shaded_world(doc, world);
             img.put_pixel(px, py, Rgba([color[0], color[1], color[2], 255]));
         }
     }
@@ -40,38 +39,96 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
     Ok(())
 }
 
-fn shaded_world(doc: &MapDocument, world: [f32; 2], tile: [i32; 2]) -> [u8; 3] {
-    let mut sum = [0.0; 3];
-    let mut wsum = 0.0;
+fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
+    let tile = [world[0].floor() as i32, world[1].floor() as i32];
+    let local = [world[0].fract(), world[1].fract()];
+    let mut mat = doc.terrain_at_i32(tile[0], tile[1]);
+    let mut eff = doc.effect_at_i32(tile[0], tile[1]);
+    let blend = 0.2;
 
-    for oy in -1..=1 {
-        for ox in -1..=1 {
-            let sx = tile[0] + ox;
-            let sy = tile[1] + oy;
-            let mat = doc.terrain_at_i32(sx, sy);
-            let eff = doc.effect_at_i32(sx, sy);
-            let center = [
-                sx as f32 + 0.5 + (hash2(sx, sy, 17) - 0.5) * 0.18,
-                sy as f32 + 0.5 + (hash2(sx, sy, 29) - 0.5) * 0.18,
-            ];
-            let dx = world[0] - center[0];
-            let dy = world[1] - center[1];
-            let weight = (-3.6 * (dx * dx + dy * dy)).exp();
-            let mut c = material_rgb(mat, world);
-            c = apply_effect_cpu(c, eff, world);
-            sum[0] += c[0] * weight;
-            sum[1] += c[1] * weight;
-            sum[2] += c[2] * weight;
-            wsum += weight;
+    let mut c = material_rgb(mat, world);
+    c = apply_effect_cpu(c, eff, world);
+
+    if mat.blends() {
+        let l = doc.terrain_at_i32(tile[0] - 1, tile[1]);
+        let r = doc.terrain_at_i32(tile[0] + 1, tile[1]);
+        let t = doc.terrain_at_i32(tile[0], tile[1] - 1);
+        let b = doc.terrain_at_i32(tile[0], tile[1] + 1);
+        let wl = edge_weight(local[0], blend);
+        let wr = edge_weight(1.0 - local[0], blend);
+        let wt = edge_weight(local[1], blend);
+        let wb = edge_weight(1.0 - local[1], blend);
+
+        let mut sum = c;
+        let mut wsum = 1.0_f32;
+        if l != mat {
+            let lc = apply_effect_cpu(
+                material_rgb(l, world),
+                doc.effect_at_i32(tile[0] - 1, tile[1]),
+                world,
+            );
+            sum[0] += lc[0] * wl;
+            sum[1] += lc[1] * wl;
+            sum[2] += lc[2] * wl;
+            wsum += wl;
+        }
+        if r != mat {
+            let rc = apply_effect_cpu(
+                material_rgb(r, world),
+                doc.effect_at_i32(tile[0] + 1, tile[1]),
+                world,
+            );
+            sum[0] += rc[0] * wr;
+            sum[1] += rc[1] * wr;
+            sum[2] += rc[2] * wr;
+            wsum += wr;
+        }
+        if t != mat {
+            let tc = apply_effect_cpu(
+                material_rgb(t, world),
+                doc.effect_at_i32(tile[0], tile[1] - 1),
+                world,
+            );
+            sum[0] += tc[0] * wt;
+            sum[1] += tc[1] * wt;
+            sum[2] += tc[2] * wt;
+            wsum += wt;
+        }
+        if b != mat {
+            let bc = apply_effect_cpu(
+                material_rgb(b, world),
+                doc.effect_at_i32(tile[0], tile[1] + 1),
+                world,
+            );
+            sum[0] += bc[0] * wb;
+            sum[1] += bc[1] * wb;
+            sum[2] += bc[2] * wb;
+            wsum += wb;
+        }
+        c = [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum];
+
+        if mat.diagonal_blend() {
+            let corner = blend * 1.35;
+            if local[0] + local[1] < corner {
+                let nw = doc.terrain_at_i32(tile[0] - 1, tile[1] - 1);
+                if l == t && l != mat && nw == l {
+                    mat = nw;
+                    eff = doc.effect_at_i32(tile[0] - 1, tile[1] - 1);
+                    c = apply_effect_cpu(material_rgb(mat, world), eff, world);
+                }
+            }
         }
     }
 
-    let inv = if wsum > 0.0 { 1.0 / wsum } else { 1.0 };
     [
-        (sum[0] * inv).clamp(0.0, 255.0) as u8,
-        (sum[1] * inv).clamp(0.0, 255.0) as u8,
-        (sum[2] * inv).clamp(0.0, 255.0) as u8,
+        c[0].clamp(0.0, 255.0) as u8,
+        c[1].clamp(0.0, 255.0) as u8,
+        c[2].clamp(0.0, 255.0) as u8,
     ]
+}
+
+fn edge_weight(distance: f32, blend: f32) -> f32 {
+    1.0 - smoothstep(0.0, blend, distance)
 }
 
 fn apply_effect_cpu(mut c: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
@@ -97,19 +154,14 @@ fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
     let n1 = fbm(p[0] * 2.7, p[1] * 2.7, 4);
     let n2 = fbm(p[0] * 6.4 + 11.0, p[1] * 6.4 - 3.0, 3);
     match mat {
-        MaterialKind::Dirt => {
-            let base = [103.0, 78.0, 54.0];
-            tint(base, 0.75 + n1 * 0.18 + n2 * 0.07)
-        }
+        MaterialKind::Dirt => tint([103.0, 78.0, 54.0], 0.75 + n1 * 0.18 + n2 * 0.07),
         MaterialKind::Grass => {
             let blade = (p[0] * 11.0 + p[1] * 2.0 + n2 * 2.0).sin().abs();
-            let base = [79.0, 129.0, 60.0];
-            tint(base, 0.78 + n1 * 0.14 + blade * 0.10)
+            tint([79.0, 129.0, 60.0], 0.78 + n1 * 0.14 + blade * 0.10)
         }
         MaterialKind::Sand => {
             let ripple = 0.5 + 0.5 * (p[0] * 9.0 + p[1] * 1.1 + n1 * 2.0).sin();
-            let base = [194.0, 176.0, 121.0];
-            tint(base, 0.82 + n1 * 0.10 + ripple * 0.08)
+            tint([194.0, 176.0, 121.0], 0.82 + n1 * 0.10 + ripple * 0.08)
         }
         MaterialKind::Water => {
             let wave = 0.5 + 0.5 * ((p[0] * 7.5 + n1 * 3.5).sin() + (p[1] * 5.0).cos()) * 0.5;
@@ -132,15 +184,58 @@ fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
             ]
         }
         MaterialKind::Brick => {
-            let mortar = brick_mortar(p);
-            let brick = tint([145.0, 71.0, 52.0], 0.78 + n1 * 0.10);
-            mix(brick, [191.0, 183.0, 172.0], mortar)
+            let seam = topdown_grid(p, 2.0, 2.0, 0.06);
+            mix(
+                tint([138.0, 62.0, 48.0], 0.82 + n1 * 0.10),
+                [181.0, 172.0, 159.0],
+                seam,
+            )
         }
         MaterialKind::Path => {
-            let chip = (hash2((p[0] * 4.0) as i32, (p[1] * 4.0) as i32, 21) * 0.25) + n1 * 0.10;
+            let chip = hash2((p[0] * 4.0) as i32, (p[1] * 4.0) as i32, 21) * 0.20 + n1 * 0.10;
             tint([126.0, 112.0, 91.0], 0.82 + chip)
         }
+        MaterialKind::Wall => {
+            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            mix(
+                tint([136.0, 143.0, 150.0], 0.82 + n1 * 0.10),
+                [95.0, 99.0, 102.0],
+                seam,
+            )
+        }
+        MaterialKind::WallDoor => {
+            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            mix(
+                tint([126.0, 88.0, 55.0], 0.86 + n1 * 0.10),
+                [150.0, 156.0, 160.0],
+                seam,
+            )
+        }
+        MaterialKind::WallWindow => {
+            let seam = topdown_grid(p, 2.0, 1.4, 0.07);
+            mix(
+                tint([96.0, 123.0, 152.0], 0.86 + n1 * 0.10),
+                [156.0, 162.0, 166.0],
+                seam,
+            )
+        }
+        MaterialKind::FloorWood => {
+            let seam = topdown_grid(p, 3.4, 1.0, 0.06);
+            mix(
+                tint([152.0, 112.0, 72.0], 0.84 + n1 * 0.10),
+                [85.0, 61.0, 39.0],
+                seam,
+            )
+        }
     }
+}
+
+fn topdown_grid(p: [f32; 2], sx: f32, sy: f32, width: f32) -> f32 {
+    let fx = (p[0] * sx).fract();
+    let fy = (p[1] * sy).fract();
+    let gx: f32 = if fx.min(1.0 - fx) < width { 1.0 } else { 0.0 };
+    let gy: f32 = if fy.min(1.0 - fy) < width { 1.0 } else { 0.0 };
+    gx.max(gy)
 }
 
 fn fbm(mut x: f32, mut y: f32, octaves: usize) -> f32 {
@@ -201,17 +296,4 @@ fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
         a[1] + (b[1] - a[1]) * t,
         a[2] + (b[2] - a[2]) * t,
     ]
-}
-
-fn brick_mortar(p: [f32; 2]) -> f32 {
-    let row = p[1].floor();
-    let offset = if (row as i32) & 1 == 0 { 0.0 } else { 0.5 };
-    let local_x = (p[0] + offset).fract();
-    let local_y = p[1].fract();
-    let mortar = (local_x.min(1.0 - local_x) < 0.06) || (local_y.min(1.0 - local_y) < 0.08);
-    if mortar {
-        1.0
-    } else {
-        0.0
-    }
 }
