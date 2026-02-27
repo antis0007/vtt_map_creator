@@ -40,86 +40,132 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
 }
 
 fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
-    let tile = [world[0].floor() as i32, world[1].floor() as i32];
+    let base_tile = [world[0].floor() as i32, world[1].floor() as i32];
     let local = [world[0].fract(), world[1].fract()];
-    let mut mat = doc.terrain_at_i32(tile[0], tile[1]);
-    let mut eff = doc.effect_at_i32(tile[0], tile[1]);
-    let blend = 0.2;
 
-    let mut c = material_rgb(mat, world);
-    c = apply_effect_cpu(c, eff, world);
+    let p00 = [base_tile[0], base_tile[1]];
+    let p_w = [base_tile[0] - 1, base_tile[1]];
+    let p_e = [base_tile[0] + 1, base_tile[1]];
+    let p_n = [base_tile[0], base_tile[1] - 1];
+    let p_s = [base_tile[0], base_tile[1] + 1];
+    let p_nw = [base_tile[0] - 1, base_tile[1] - 1];
+    let p_ne = [base_tile[0] + 1, base_tile[1] - 1];
+    let p_sw = [base_tile[0] - 1, base_tile[1] + 1];
+    let p_se = [base_tile[0] + 1, base_tile[1] + 1];
 
-    if mat.blends() {
-        let l = doc.terrain_at_i32(tile[0] - 1, tile[1]);
-        let r = doc.terrain_at_i32(tile[0] + 1, tile[1]);
-        let t = doc.terrain_at_i32(tile[0], tile[1] - 1);
-        let b = doc.terrain_at_i32(tile[0], tile[1] + 1);
-        let wl = edge_weight(local[0], blend);
-        let wr = edge_weight(1.0 - local[0], blend);
-        let wt = edge_weight(local[1], blend);
-        let wb = edge_weight(1.0 - local[1], blend);
+    let mat = doc.terrain_at_i32(p00[0], p00[1]);
+    let eff = doc.effect_at_i32(p00[0], p00[1]);
 
-        let mut sum = c;
+    let blend = crate::blend_rules::CPU_EXPORT_BLEND_STRENGTH
+        .clamp(0.0, crate::blend_rules::BLEND_STRENGTH_MAX);
+
+    if blend > 0.0 && crate::blend_rules::material_blends(mat) {
+        let edge_l = edge_weight(local[0], blend);
+        let edge_r = edge_weight(1.0 - local[0], blend);
+        let edge_t = edge_weight(local[1], blend);
+        let edge_b = edge_weight(1.0 - local[1], blend);
+
+        let w = doc.terrain_at_i32(p_w[0], p_w[1]);
+        let e = doc.terrain_at_i32(p_e[0], p_e[1]);
+        let n = doc.terrain_at_i32(p_n[0], p_n[1]);
+        let s = doc.terrain_at_i32(p_s[0], p_s[1]);
+
         let mut wsum = 1.0_f32;
-        if l != mat {
-            let lc = apply_effect_cpu(
-                material_rgb(l, world),
-                doc.effect_at_i32(tile[0] - 1, tile[1]),
-                world,
-            );
-            sum[0] += lc[0] * wl;
-            sum[1] += lc[1] * wl;
-            sum[2] += lc[2] * wl;
-            wsum += wl;
-        }
-        if r != mat {
-            let rc = apply_effect_cpu(
-                material_rgb(r, world),
-                doc.effect_at_i32(tile[0] + 1, tile[1]),
-                world,
-            );
-            sum[0] += rc[0] * wr;
-            sum[1] += rc[1] * wr;
-            sum[2] += rc[2] * wr;
-            wsum += wr;
-        }
-        if t != mat {
-            let tc = apply_effect_cpu(
-                material_rgb(t, world),
-                doc.effect_at_i32(tile[0], tile[1] - 1),
-                world,
-            );
-            sum[0] += tc[0] * wt;
-            sum[1] += tc[1] * wt;
-            sum[2] += tc[2] * wt;
-            wsum += wt;
-        }
-        if b != mat {
-            let bc = apply_effect_cpu(
-                material_rgb(b, world),
-                doc.effect_at_i32(tile[0], tile[1] + 1),
-                world,
-            );
-            sum[0] += bc[0] * wb;
-            sum[1] += bc[1] * wb;
-            sum[2] += bc[2] * wb;
-            wsum += wb;
-        }
-        c = [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum];
+        let mut color_sum = material_rgb(mat, world);
+        let mut effect_sum = effect_overlay_cpu(eff, world);
 
-        if mat.diagonal_blend() {
-            let corner = blend * 1.35;
+        if w != mat {
+            color_sum = add_weighted(color_sum, material_rgb(w, world), edge_l);
+            effect_sum = add_weighted(
+                effect_sum,
+                effect_overlay_cpu(doc.effect_at_i32(p_w[0], p_w[1]), world),
+                edge_l,
+            );
+            wsum += edge_l;
+        }
+        if e != mat {
+            color_sum = add_weighted(color_sum, material_rgb(e, world), edge_r);
+            effect_sum = add_weighted(
+                effect_sum,
+                effect_overlay_cpu(doc.effect_at_i32(p_e[0], p_e[1]), world),
+                edge_r,
+            );
+            wsum += edge_r;
+        }
+        if n != mat {
+            color_sum = add_weighted(color_sum, material_rgb(n, world), edge_t);
+            effect_sum = add_weighted(
+                effect_sum,
+                effect_overlay_cpu(doc.effect_at_i32(p_n[0], p_n[1]), world),
+                edge_t,
+            );
+            wsum += edge_t;
+        }
+        if s != mat {
+            color_sum = add_weighted(color_sum, material_rgb(s, world), edge_b);
+            effect_sum = add_weighted(
+                effect_sum,
+                effect_overlay_cpu(doc.effect_at_i32(p_s[0], p_s[1]), world),
+                edge_b,
+            );
+            wsum += edge_b;
+        }
+
+        let mut c = [
+            (color_sum[0] + effect_sum[0]) / wsum.max(0.0001),
+            (color_sum[1] + effect_sum[1]) / wsum.max(0.0001),
+            (color_sum[2] + effect_sum[2]) / wsum.max(0.0001),
+        ];
+
+        if crate::blend_rules::material_diagonal(mat) {
+            let corner = blend * crate::blend_rules::DIAGONAL_CORNER_SCALE;
+
             if local[0] + local[1] < corner {
-                let nw = doc.terrain_at_i32(tile[0] - 1, tile[1] - 1);
-                if l == t && l != mat && nw == l {
-                    mat = nw;
-                    eff = doc.effect_at_i32(tile[0] - 1, tile[1] - 1);
-                    c = apply_effect_cpu(material_rgb(mat, world), eff, world);
+                let nw = doc.terrain_at_i32(p_nw[0], p_nw[1]);
+                if w == n && w != mat && nw == w {
+                    c = add3(
+                        material_rgb(w, world),
+                        effect_overlay_cpu(doc.effect_at_i32(p_nw[0], p_nw[1]), world),
+                    );
+                }
+            }
+            if (1.0 - local[0]) + local[1] < corner {
+                let ne = doc.terrain_at_i32(p_ne[0], p_ne[1]);
+                if e == n && e != mat && ne == e {
+                    c = add3(
+                        material_rgb(e, world),
+                        effect_overlay_cpu(doc.effect_at_i32(p_ne[0], p_ne[1]), world),
+                    );
+                }
+            }
+            if local[0] + (1.0 - local[1]) < corner {
+                let sw = doc.terrain_at_i32(p_sw[0], p_sw[1]);
+                if w == s && w != mat && sw == w {
+                    c = add3(
+                        material_rgb(w, world),
+                        effect_overlay_cpu(doc.effect_at_i32(p_sw[0], p_sw[1]), world),
+                    );
+                }
+            }
+            if (1.0 - local[0]) + (1.0 - local[1]) < corner {
+                let se = doc.terrain_at_i32(p_se[0], p_se[1]);
+                if e == s && e != mat && se == e {
+                    c = add3(
+                        material_rgb(e, world),
+                        effect_overlay_cpu(doc.effect_at_i32(p_se[0], p_se[1]), world),
+                    );
                 }
             }
         }
+
+        return [
+            c[0].clamp(0.0, 255.0) as u8,
+            c[1].clamp(0.0, 255.0) as u8,
+            c[2].clamp(0.0, 255.0) as u8,
+        ];
     }
 
+    let c = add3(material_rgb(mat, world), effect_overlay_cpu(eff, world));
     [
         c[0].clamp(0.0, 255.0) as u8,
         c[1].clamp(0.0, 255.0) as u8,
@@ -131,21 +177,29 @@ fn edge_weight(distance: f32, blend: f32) -> f32 {
     1.0 - smoothstep(0.0, blend, distance)
 }
 
-fn apply_effect_cpu(mut c: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
+fn add_weighted(base: [f32; 3], value: [f32; 3], weight: f32) -> [f32; 3] {
+    [
+        base[0] + value[0] * weight,
+        base[1] + value[1] * weight,
+        base[2] + value[2] * weight,
+    ]
+}
+
+fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn effect_overlay_cpu(effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
     match effect {
-        EffectKind::None => c,
+        EffectKind::None => [0.0, 0.0, 0.0],
         EffectKind::Wind => {
             let gust = 0.5 + 0.5 * ((p[0] * 4.0 + p[1] * 1.3).sin() * (p[1] * 3.0).cos());
-            c[1] += 10.0 * gust;
-            c
+            [0.0, 10.0 * gust, 0.0]
         }
         EffectKind::Rain => {
             let streak = ((p[0] * 12.0 + p[1] * 28.0).fract() * 2.0 - 1.0).abs();
             let mask = (1.0 - smoothstep(0.65, 0.95, streak)) * 18.0;
-            c[0] += mask;
-            c[1] += mask;
-            c[2] += mask * 1.4;
-            c
+            [mask, mask, mask * 1.4]
         }
     }
 }
@@ -296,4 +350,69 @@ fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
         a[1] + (b[1] - a[1]) * t,
         a[2] + (b[2] - a[2]) * t,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shaded_world;
+    use crate::model::{EffectKind, MapDocument, MaterialKind};
+
+    fn doc_from_rows(rows: &[[MaterialKind; 3]; 3]) -> MapDocument {
+        let mut doc = MapDocument::new(3, 3);
+        doc.tile_px = 32;
+        for (y, row) in rows.iter().enumerate() {
+            for (x, material) in row.iter().enumerate() {
+                let idx = doc.idx(x as u32, y as u32);
+                doc.terrain[idx] = *material;
+                doc.effects[idx] = EffectKind::None;
+            }
+        }
+        doc
+    }
+
+    fn checksum(doc: &MapDocument) -> u64 {
+        let mut acc = 0u64;
+        for py in 0..(doc.height * doc.tile_px) {
+            for px in 0..(doc.width * doc.tile_px) {
+                let world = [
+                    px as f32 / doc.tile_px as f32,
+                    py as f32 / doc.tile_px as f32,
+                ];
+                let c = shaded_world(doc, world);
+                acc = acc
+                    .wrapping_mul(1_099_511_628_211)
+                    .wrapping_add(u64::from(c[0]))
+                    .wrapping_add(u64::from(c[1]) << 8)
+                    .wrapping_add(u64::from(c[2]) << 16);
+            }
+        }
+        acc
+    }
+    #[test]
+    fn diagonal_corner_fixtures_match_snapshot() {
+        let path = MaterialKind::Path;
+        let dirt = MaterialKind::Dirt;
+
+        let nw_doc = doc_from_rows(&[[dirt, dirt, path], [dirt, path, path], [path, path, path]]);
+        assert_eq!(shaded_world(&nw_doc, [1.02, 1.02]), [90, 68, 47]);
+
+        let ne_doc = doc_from_rows(&[[path, dirt, dirt], [path, path, dirt], [path, path, path]]);
+        assert_eq!(shaded_world(&ne_doc, [1.98, 1.02]), [88, 66, 46]);
+
+        let sw_doc = doc_from_rows(&[[path, path, path], [dirt, path, path], [dirt, dirt, path]]);
+        assert_eq!(shaded_world(&sw_doc, [1.02, 1.98]), [87, 66, 45]);
+
+        let se_doc = doc_from_rows(&[[path, path, path], [path, path, dirt], [path, dirt, dirt]]);
+        assert_eq!(shaded_world(&se_doc, [1.98, 1.98]), [90, 68, 47]);
+    }
+
+    #[test]
+    fn export_parity_checksum_fixture() {
+        let g = MaterialKind::Grass;
+        let p = MaterialKind::Path;
+        let w = MaterialKind::Wall;
+        let s = MaterialKind::Sand;
+        let doc = doc_from_rows(&[[g, p, g], [w, p, s], [g, w, g]]);
+        assert_eq!(checksum(&doc), 17_084_880_885_835_417_417);
+    }
 }
