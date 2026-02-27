@@ -52,111 +52,149 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
 fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
     let base_tile = [world[0].floor() as i32, world[1].floor() as i32];
     let local = [world[0].fract(), world[1].fract()];
-    let mut mat = doc
-        .terrain_at_i32_checked(base_tile[0], base_tile[1])
-        .unwrap_or(MaterialKind::Dirt);
-    let mut eff = doc.effect_at_i32(base_tile[0], base_tile[1]);
+    let mat = doc.terrain_at_i32(tile[0], tile[1]);
+    let eff = doc.effect_at_i32(tile[0], tile[1]);
     let blend = 0.2;
 
     if mat.blends() {
-        let l = doc.terrain_at_i32_checked(base_tile[0] - 1, base_tile[1]);
-        let r = doc.terrain_at_i32_checked(base_tile[0] + 1, base_tile[1]);
-        let t = doc.terrain_at_i32_checked(base_tile[0], base_tile[1] - 1);
-        let b = doc.terrain_at_i32_checked(base_tile[0], base_tile[1] + 1);
+        let l = doc.terrain_at_i32(tile[0] - 1, tile[1]);
+        let r = doc.terrain_at_i32(tile[0] + 1, tile[1]);
+        let t = doc.terrain_at_i32(tile[0], tile[1] - 1);
+        let b = doc.terrain_at_i32(tile[0], tile[1] + 1);
+        let nw = doc.terrain_at_i32(tile[0] - 1, tile[1] - 1);
+        let ne = doc.terrain_at_i32(tile[0] + 1, tile[1] - 1);
+        let sw = doc.terrain_at_i32(tile[0] - 1, tile[1] + 1);
+        let se = doc.terrain_at_i32(tile[0] + 1, tile[1] + 1);
         let wl = edge_weight(local[0], blend);
         let wr = edge_weight(1.0 - local[0], blend);
         let wt = edge_weight(local[1], blend);
         let wb = edge_weight(1.0 - local[1], blend);
+        let wnw = corner_weight(local[0], local[1], blend);
+        let wne = corner_weight(1.0 - local[0], local[1], blend);
+        let wsw = corner_weight(local[0], 1.0 - local[1], blend);
+        let wse = corner_weight(1.0 - local[0], 1.0 - local[1], blend);
 
         let mut wsum = 1.0_f32;
-        let mut color_sum = material_rgb(mat, world);
-        let mut effect_sum = effect_overlay_cpu(eff, world);
-        if let Some(l_mat) = l.filter(|&other| mat.blend_compatible(other)) {
-            color_sum = add_weighted(color_sum, material_rgb(l_mat, world), wl);
-            effect_sum = add_weighted(
-                effect_sum,
-                effect_overlay_cpu(doc.effect_at_i32(base_tile[0] - 1, base_tile[1]), world),
-                wl,
-            );
-            wsum += wl;
-        }
-        if let Some(r_mat) = r.filter(|&other| mat.blend_compatible(other)) {
-            color_sum = add_weighted(color_sum, material_rgb(r_mat, world), wr);
-            effect_sum = add_weighted(
-                effect_sum,
-                effect_overlay_cpu(doc.effect_at_i32(base_tile[0] + 1, base_tile[1]), world),
-                wr,
-            );
-            wsum += wr;
-        }
-        if let Some(t_mat) = t.filter(|&other| mat.blend_compatible(other)) {
-            color_sum = add_weighted(color_sum, material_rgb(t_mat, world), wt);
-            effect_sum = add_weighted(
-                effect_sum,
-                effect_overlay_cpu(doc.effect_at_i32(base_tile[0], base_tile[1] - 1), world),
-                wt,
-            );
-            wsum += wt;
-        }
-        if let Some(b_mat) = b.filter(|&other| mat.blend_compatible(other)) {
-            color_sum = add_weighted(color_sum, material_rgb(b_mat, world), wb);
-            effect_sum = add_weighted(
-                effect_sum,
-                effect_overlay_cpu(doc.effect_at_i32(base_tile[0], base_tile[1] + 1), world),
-                wb,
-            );
-            wsum += wb;
-        }
+        let lw = if l != mat { wl } else { 0.0 };
+        let rw = if r != mat { wr } else { 0.0 };
+        let tw = if t != mat { wt } else { 0.0 };
+        let bw = if b != mat { wb } else { 0.0 };
+        let nww = if nw != mat { wnw } else { 0.0 };
+        let neww = if ne != mat { wne } else { 0.0 };
+        let sww = if sw != mat { wsw } else { 0.0 };
+        let sew = if se != mat { wse } else { 0.0 };
 
-        let mut c = [
-            (color_sum[0] + effect_sum[0]) / wsum.max(0.0001),
-            (color_sum[1] + effect_sum[1]) / wsum.max(0.0001),
-            (color_sum[2] + effect_sum[2]) / wsum.max(0.0001),
-        ];
+        let lc = apply_effect_cpu(
+            material_rgb(l, world),
+            doc.effect_at_i32(tile[0] - 1, tile[1]),
+            world,
+        );
+        let rc = apply_effect_cpu(
+            material_rgb(r, world),
+            doc.effect_at_i32(tile[0] + 1, tile[1]),
+            world,
+        );
+        let tc = apply_effect_cpu(
+            material_rgb(t, world),
+            doc.effect_at_i32(tile[0], tile[1] - 1),
+            world,
+        );
+        let bc = apply_effect_cpu(
+            material_rgb(b, world),
+            doc.effect_at_i32(tile[0], tile[1] + 1),
+            world,
+        );
+        let nwc = apply_effect_cpu(
+            material_rgb(nw, world),
+            doc.effect_at_i32(tile[0] - 1, tile[1] - 1),
+            world,
+        );
+        let nec = apply_effect_cpu(
+            material_rgb(ne, world),
+            doc.effect_at_i32(tile[0] + 1, tile[1] - 1),
+            world,
+        );
+        let swc = apply_effect_cpu(
+            material_rgb(sw, world),
+            doc.effect_at_i32(tile[0] - 1, tile[1] + 1),
+            world,
+        );
+        let sec = apply_effect_cpu(
+            material_rgb(se, world),
+            doc.effect_at_i32(tile[0] + 1, tile[1] + 1),
+            world,
+        );
 
-        if crate::blend_rules::material_diagonal(mat) {
-            let corner = blend * crate::blend_rules::DIAGONAL_CORNER_SCALE;
+        sum[0] += lc[0] * lw + rc[0] * rw + tc[0] * tw + bc[0] * bw;
+        sum[1] += lc[1] * lw + rc[1] * rw + tc[1] * tw + bc[1] * bw;
+        sum[2] += lc[2] * lw + rc[2] * rw + tc[2] * tw + bc[2] * bw;
+        sum[0] += nwc[0] * nww + nec[0] * neww + swc[0] * sww + sec[0] * sew;
+        sum[1] += nwc[1] * nww + nec[1] * neww + swc[1] * sww + sec[1] * sew;
+        sum[2] += nwc[2] * nww + nec[2] * neww + swc[2] * sww + sec[2] * sew;
+        wsum += lw + rw + tw + bw + nww + neww + sww + sew;
 
-            if local[0] + local[1] < corner {
-                let nw = doc.terrain_at_i32_checked(base_tile[0] - 1, base_tile[1] - 1);
-                if let (Some(l_mat), Some(t_mat), Some(nw_mat)) = (l, t, nw) {
-                    if l_mat == t_mat && nw_mat == l_mat && mat.blend_compatible(l_mat) {
-                        mat = nw_mat;
-                        eff = doc.effect_at_i32(base_tile[0] - 1, base_tile[1] - 1);
-                        c = apply_effect_cpu(material_rgb(mat, world), eff, world);
-                    }
-                }
-            }
-            if (1.0 - local[0]) + local[1] < corner {
-                let ne = doc.terrain_at_i32_checked(base_tile[0] + 1, base_tile[1] - 1);
-                if let (Some(r_mat), Some(t_mat), Some(ne_mat)) = (r, t, ne) {
-                    if r_mat == t_mat && ne_mat == r_mat && mat.blend_compatible(r_mat) {
-                        mat = ne_mat;
-                        eff = doc.effect_at_i32(base_tile[0] + 1, base_tile[1] - 1);
-                        c = apply_effect_cpu(material_rgb(mat, world), eff, world);
-                    }
-                }
-            }
-            if local[0] + (1.0 - local[1]) < corner {
-                let sw = doc.terrain_at_i32_checked(base_tile[0] - 1, base_tile[1] + 1);
-                if let (Some(l_mat), Some(b_mat), Some(sw_mat)) = (l, b, sw) {
-                    if l_mat == b_mat && sw_mat == l_mat && mat.blend_compatible(l_mat) {
-                        mat = sw_mat;
-                        eff = doc.effect_at_i32(base_tile[0] - 1, base_tile[1] + 1);
-                        c = apply_effect_cpu(material_rgb(mat, world), eff, world);
-                    }
-                }
-            }
-            if (1.0 - local[0]) + (1.0 - local[1]) < corner {
-                let se = doc.terrain_at_i32_checked(base_tile[0] + 1, base_tile[1] + 1);
-                if let (Some(r_mat), Some(b_mat), Some(se_mat)) = (r, b, se) {
-                    if r_mat == b_mat && se_mat == r_mat && mat.blend_compatible(r_mat) {
-                        mat = se_mat;
-                        eff = doc.effect_at_i32(base_tile[0] + 1, base_tile[1] + 1);
-                        c = apply_effect_cpu(material_rgb(mat, world), eff, world);
-                    }
-                }
-            }
+        c = [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum];
+
+        if mat.diagonal_blend() {
+            let corner = blend * 1.35;
+            let aa = 0.02;
+            let nw_mask = if l == t && l != mat && nw == l {
+                1.0 - smoothstep(-aa, aa, local[0] + local[1] - corner)
+            } else {
+                0.0
+            };
+            let ne_mask = if r == t && r != mat && ne == r {
+                1.0 - smoothstep(-aa, aa, (1.0 - local[0]) + local[1] - corner)
+            } else {
+                0.0
+            };
+            let sw_mask = if l == b && l != mat && sw == l {
+                1.0 - smoothstep(-aa, aa, local[0] + (1.0 - local[1]) - corner)
+            } else {
+                0.0
+            };
+            let se_mask = if r == b && r != mat && se == r {
+                1.0 - smoothstep(-aa, aa, (1.0 - local[0]) + (1.0 - local[1]) - corner)
+            } else {
+                0.0
+            };
+
+            c = mix(
+                c,
+                apply_effect_cpu(
+                    material_rgb(l, world),
+                    doc.effect_at_i32(tile[0] - 1, tile[1] - 1),
+                    world,
+                ),
+                nw_mask,
+            );
+            c = mix(
+                c,
+                apply_effect_cpu(
+                    material_rgb(r, world),
+                    doc.effect_at_i32(tile[0] + 1, tile[1] - 1),
+                    world,
+                ),
+                ne_mask,
+            );
+            c = mix(
+                c,
+                apply_effect_cpu(
+                    material_rgb(l, world),
+                    doc.effect_at_i32(tile[0] - 1, tile[1] + 1),
+                    world,
+                ),
+                sw_mask,
+            );
+            c = mix(
+                c,
+                apply_effect_cpu(
+                    material_rgb(r, world),
+                    doc.effect_at_i32(tile[0] + 1, tile[1] + 1),
+                    world,
+                ),
+                se_mask,
+            );
         }
 
         return [
@@ -178,233 +216,145 @@ fn edge_weight(distance: f32, blend: f32) -> f32 {
     1.0 - smoothstep(0.0, blend, distance)
 }
 
-fn add_weighted(base: [f32; 3], value: [f32; 3], weight: f32) -> [f32; 3] {
-    [
-        base[0] + value[0] * weight,
-        base[1] + value[1] * weight,
-        base[2] + value[2] * weight,
-    ]
+fn corner_weight(dx: f32, dy: f32, blend: f32) -> f32 {
+    let radius = (blend * std::f32::consts::SQRT_2).max(0.0001);
+    1.0 - smoothstep(0.0, radius, (dx * dx + dy * dy).sqrt())
 }
 
-fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn apply_effect_cpu(base: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
-    add3(base, effect_overlay_cpu(effect, p))
-}
-
-fn effect_overlay_cpu(effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
+fn apply_effect_cpu(mut c: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
     match effect {
         EffectKind::None => [0.0, 0.0, 0.0],
         EffectKind::Wind => {
-            let gust = 0.5 + 0.5 * ((p[0] * 4.0 + p[1] * 1.3).sin() * (p[1] * 3.0).cos());
-            [0.0, 10.0 * gust, 0.0]
+            let gust =
+                0.5 + 0.5 * (p[0] * 4.0 + p[1] * 1.5 + fbm(p[0] * 1.5, p[1] * 1.5, 5) * 4.0).sin();
+            c[0] += 7.65 * gust;
+            c[1] += 20.4 * gust;
+            c[2] += 5.1 * gust;
+            c
         }
         EffectKind::Rain => {
-            let streak = ((p[0] * 12.0 + p[1] * 28.0).fract() * 2.0 - 1.0).abs();
-            let mask = (1.0 - smoothstep(0.65, 0.95, streak)) * 18.0;
-            [mask, mask, mask * 1.4]
+            let streak = ((p[0] * 14.0 + p[1] * 32.0).fract() * 2.0 - 1.0).abs();
+            let band = 1.0 - smoothstep(0.72, 0.96, streak);
+            c[0] += 20.4 * band;
+            c[1] += 22.95 * band;
+            c[2] += 33.15 * band;
+            c
         }
     }
 }
 
 fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
-    let tile_local = [p[0].fract(), p[1].fract()];
-    let block_grid = [
-        tile_local[0] * WALL_BLOCK_COLS,
-        tile_local[1] * WALL_BLOCK_ROWS,
-    ];
-    let block_id = [block_grid[0].floor(), block_grid[1].floor()];
-    let n1 = fbm(p[0] * 2.7, p[1] * 2.7, 4);
-    let n2 = fbm(p[0] * 6.4 + 11.0, p[1] * 6.4 - 3.0, 3);
+    let n1 = fbm(p[0] * 2.6, p[1] * 2.6, 5);
+    let n2 = fbm(p[0] * 6.2 + 17.0, p[1] * 6.2 - 9.0, 5);
     match mat {
-        MaterialKind::Dirt => tint([103.0, 78.0, 54.0], 0.75 + n1 * 0.18 + n2 * 0.07),
+        MaterialKind::Dirt => tint([102.0, 76.5, 53.55], 0.76 + n1 * 0.18 + n2 * 0.06),
         MaterialKind::Grass => {
-            let blade = (p[0] * 11.0 + p[1] * 2.0 + n2 * 2.0).sin().abs();
-            tint([79.0, 129.0, 60.0], 0.78 + n1 * 0.14 + blade * 0.10)
+            let bands = 0.5 + 0.5 * (p[0] * 14.0 + fbm(p[0] * 2.5, p[1] * 2.5, 5) * 3.0).sin();
+            let blades = 0.5 + 0.5 * (p[0] * 16.0 + p[1] * 3.0 + n2 * 5.0).sin();
+            let mut c = tint(
+                [76.5, 127.5, 58.65],
+                0.72 + n1 * 0.12 + bands * 0.10 + blades * 0.08,
+            );
+            c[0] += 2.55;
+            c[1] += 7.65;
+            c
         }
         MaterialKind::Sand => {
-            let ripple = 0.5 + 0.5 * (p[0] * 9.0 + p[1] * 1.1 + n1 * 2.0).sin();
-            tint([194.0, 176.0, 121.0], 0.82 + n1 * 0.10 + ripple * 0.08)
+            let ripples = 0.5 + 0.5 * (p[0] * 11.0 + p[1] * 1.2 + n1 * 4.0).sin();
+            tint([198.9, 178.5, 122.4], 0.82 + n2 * 0.08 + ripples * 0.08)
         }
         MaterialKind::Water => {
-            let wave = 0.5 + 0.5 * ((p[0] * 7.5 + n1 * 3.5).sin() + (p[1] * 5.0).cos()) * 0.5;
-            let c = tint([35.0, 94.0, 148.0], 0.78 + wave * 0.25);
-            [c[0], c[1] + 12.0, c[2] + 18.0]
+            let wave =
+                0.5 + 0.5 * ((p[0] + p[1]) * 2.4 + fbm(p[0] * 0.7, p[1] * 0.7, 5) * 4.0).sin();
+            let caustic = 0.5 + 0.5 * (p[0] * 18.0 - p[1] * 10.0 + n2 * 8.0).sin();
+            let mut c = tint([25.5, 81.6, 132.6], 0.76 + wave * 0.28);
+            c[0] += 7.65 * caustic;
+            c[1] += 22.95 * caustic;
+            c[2] += 33.15 * caustic;
+            c
         }
         MaterialKind::Lava => {
-            let molten = (p[0] * 8.0 + n2 * 4.0).sin() * (p[1] * 7.0 - n1 * 2.0).cos();
-            let glow = 0.5 + 0.5 * molten;
-            let c = tint([165.0, 55.0, 18.0], 0.72 + glow * 0.35);
-            [c[0] + 30.0 * glow, c[1] + 18.0 * glow, c[2]]
+            let molten = 0.5 + 0.5 * (p[0] * 9.0 + n1 * 8.0).sin() * (p[1] * 7.0 - n2 * 6.0).cos();
+            let mut c = tint([147.9, 40.8, 10.2], 0.74 + molten * 0.30);
+            c[0] += 56.1 * molten;
+            c[1] += 25.5 * molten;
+            c
         }
         MaterialKind::Gravel => {
-            let pebble = hash2((p[0] * 5.0) as i32, (p[1] * 5.0) as i32, 9);
-            let c = tint([118.0, 118.0, 114.0], 0.82 + n1 * 0.08);
+            let grain = hash2((p[0] * 7.0).floor() as i32, (p[1] * 7.0).floor() as i32, 9);
+            let c = tint([122.4, 122.4, 117.3], 0.82 + n1 * 0.08);
             [
-                c[0] + pebble * 18.0,
-                c[1] + pebble * 18.0,
-                c[2] + pebble * 18.0,
+                c[0] + grain * 20.4,
+                c[1] + grain * 20.4,
+                c[2] + grain * 20.4,
             ]
         }
         MaterialKind::Brick => {
-            let seam = topdown_grid(p, 2.0, 2.0, 0.06);
+            let seam = brick_topdown_mask([p[0] + n1 * 0.02, p[1] + n2 * 0.02]);
             mix(
-                tint([138.0, 62.0, 48.0], 0.82 + n1 * 0.10),
-                [181.0, 172.0, 159.0],
-                seam,
+                tint([124.95, 56.1, 40.8], 0.86 + n1 * 0.12),
+                [181.05, 168.3, 153.0],
+                seam * 0.9,
             )
         }
         MaterialKind::Path => {
-            let chip = hash2((p[0] * 4.0) as i32, (p[1] * 4.0) as i32, 21) * 0.20 + n1 * 0.10;
-            tint([126.0, 112.0, 91.0], 0.82 + chip)
+            let chips = hash2((p[0] * 5.0).floor() as i32, (p[1] * 5.0).floor() as i32, 21);
+            tint([127.5, 109.65, 84.15], 0.86 + n1 * 0.08 + chips * 0.08)
         }
         MaterialKind::Wall => {
-            let seam = wall_block_mask(tile_local);
-            let block_seed = hash2(
-                (p[0].floor() * 11.0 + block_id[0] * 3.0) as i32,
-                (p[1].floor() * 11.0 + block_id[1] * 3.0) as i32,
-                33,
-            );
+            let seam = stone_block_mask([p[0] + n1 * 0.04, p[1] + n2 * 0.04]);
             mix(
-                tint(
-                    [136.0, 143.0, 150.0],
-                    0.82 + n1 * 0.10 + (block_seed - 0.5) * 0.10,
-                ),
-                [95.0, 99.0, 102.0],
+                tint([137.7, 145.35, 153.0], 0.84 + n1 * 0.10),
+                [94.35, 96.9, 99.45],
                 seam * 0.95,
             )
         }
         MaterialKind::WallDoor => {
-            let seam = wall_block_mask(tile_local);
-            let stone = mix(
-                tint([135.0, 143.0, 153.0], 0.82 + n1 * 0.09),
-                [92.0, 95.0, 99.0],
-                seam * 0.9,
-            );
-
-            let opening_min = [
-                0.5 - WALL_DOOR_WIDTH * 0.5,
-                1.0 - WALL_DOOR_HEIGHT + WALL_FRAME_THICKNESS,
-            ];
-            let opening_max = [0.5 + WALL_DOOR_WIDTH * 0.5, 1.0 - WALL_FRAME_THICKNESS];
-            let frame_min = [
-                opening_min[0] - WALL_FRAME_THICKNESS,
-                opening_min[1] - WALL_FRAME_THICKNESS,
-            ];
-            let frame_max = [opening_max[0] + WALL_FRAME_THICKNESS, 1.0];
-
-            let opening = rect_mask(tile_local, opening_min, opening_max);
-            let frame = (rect_mask(tile_local, frame_min, frame_max) - opening).max(0.0);
-            let with_frame = mix(stone, [160.0, 167.0, 173.0], frame);
+            let seam = stone_block_mask(p);
             mix(
-                with_frame,
-                tint([64.0, 38.0, 21.0], 0.78 + n2 * 0.12),
-                opening,
+                tint([112.2, 76.5, 43.35], 0.9 + n1 * 0.08),
+                [147.9, 153.0, 158.1],
+                seam * 0.8,
             )
         }
         MaterialKind::WallWindow => {
-            let seam = wall_block_mask(tile_local);
-            let wall = mix(
-                tint([135.0, 143.0, 153.0], 0.83 + n1 * 0.09),
-                [92.0, 95.0, 99.0],
-                seam * 0.9,
-            );
-
-            let outer_min = [
-                0.5 - WALL_WINDOW_WIDTH * 0.5,
-                0.36 - WALL_WINDOW_HEIGHT * 0.5,
-            ];
-            let outer_max = [
-                0.5 + WALL_WINDOW_WIDTH * 0.5,
-                0.36 + WALL_WINDOW_HEIGHT * 0.5,
-            ];
-            let inner_min = [
-                outer_min[0] + WALL_FRAME_THICKNESS,
-                outer_min[1] + WALL_FRAME_THICKNESS,
-            ];
-            let inner_max = [
-                outer_max[0] - WALL_FRAME_THICKNESS,
-                outer_max[1] - WALL_FRAME_THICKNESS,
-            ];
-            let inner_size = [inner_max[0] - inner_min[0], inner_max[1] - inner_min[1]];
-
-            let window_outer = rect_mask(tile_local, outer_min, outer_max);
-            let glass_area = rect_mask(tile_local, inner_min, inner_max);
-            let frame = (window_outer - glass_area).max(0.0);
-
-            let v_mid = inner_min[0] + inner_size[0] * 0.5;
-            let h_mid = inner_min[1] + inner_size[1] * 0.5;
-            let v_bar = rect_mask(
-                tile_local,
-                [v_mid - WALL_MULLION_THICKNESS, inner_min[1]],
-                [v_mid + WALL_MULLION_THICKNESS, inner_max[1]],
-            );
-            let h_bar = rect_mask(
-                tile_local,
-                [inner_min[0], h_mid - WALL_MULLION_THICKNESS],
-                [inner_max[0], h_mid + WALL_MULLION_THICKNESS],
-            );
-            let mullion = v_bar.max(h_bar) * glass_area;
-
-            let pane_seed = hash2(
-                (p[0].floor() * 7.0 + block_id[0]) as i32,
-                (p[1].floor() * 7.0 + block_id[1]) as i32,
-                71,
-            );
-            let glass = tint([84.0, 128.0, 168.0], 0.84 + pane_seed * 0.16);
-            let highlight = rect_mask(
-                tile_local,
-                [inner_min[0] + 0.03, inner_min[1] + 0.03],
-                [
-                    inner_min[0] + inner_size[0] * 0.35,
-                    inner_min[1] + inner_size[1] * 0.26,
-                ],
-            ) * glass_area;
-
-            let mut color = mix(wall, [162.0, 168.0, 174.0], frame);
-            color = mix(color, glass, glass_area);
-            color = mix(color, [156.0, 162.0, 168.0], mullion);
-            [
-                color[0] + 30.0 * highlight,
-                color[1] + 36.0 * highlight,
-                color[2] + 42.0 * highlight,
-            ]
+            let seam = stone_block_mask(p);
+            mix(
+                tint([91.8, 127.5, 160.65], 0.9 + n1 * 0.10),
+                [158.1, 165.75, 170.85],
+                seam * 0.85,
+            )
         }
         MaterialKind::FloorWood => {
-            let seam = topdown_grid(p, 3.4, 1.0, 0.06);
+            let seam = plank_mask([p[0] + n2 * 0.03, p[1]]);
             mix(
-                tint([152.0, 112.0, 72.0], 0.84 + n1 * 0.10),
-                [85.0, 61.0, 39.0],
-                seam,
+                tint([145.35, 102.0, 63.75], 0.86 + n1 * 0.12),
+                [76.5, 53.55, 33.15],
+                seam * 0.8,
             )
         }
     }
 }
 
-fn rect_mask(p: [f32; 2], min_p: [f32; 2], max_p: [f32; 2]) -> f32 {
-    if p[0] >= min_p[0] && p[0] <= max_p[0] && p[1] >= min_p[1] && p[1] <= max_p[1] {
-        1.0
-    } else {
-        0.0
-    }
+fn plank_mask(p: [f32; 2]) -> f32 {
+    let x = (p[0] * 3.5).fract();
+    1.0 - smoothstep(0.0, 0.06, x.min(1.0 - x))
 }
 
-fn wall_block_mask(tile_local: [f32; 2]) -> f32 {
-    let fx = (tile_local[0] * WALL_BLOCK_COLS).fract();
-    let fy = (tile_local[1] * WALL_BLOCK_ROWS).fract();
-    let gx = 1.0 - smoothstep(0.0, WALL_SEAM_WIDTH, fx.min(1.0 - fx));
-    let gy = 1.0 - smoothstep(0.0, WALL_SEAM_WIDTH, fy.min(1.0 - fy));
-    gx.max(gy)
+fn stone_block_mask(p: [f32; 2]) -> f32 {
+    let gx = (p[0] * 2.0).fract();
+    let gy = (p[1] * 1.4).fract();
+    let seam_x = 1.0 - smoothstep(0.0, 0.07, gx.min(1.0 - gx));
+    let seam_y = 1.0 - smoothstep(0.0, 0.07, gy.min(1.0 - gy));
+    seam_x.max(seam_y)
 }
 
-fn topdown_grid(p: [f32; 2], sx: f32, sy: f32, width: f32) -> f32 {
-    let fx = (p[0] * sx).fract();
-    let fy = (p[1] * sy).fract();
-    let gx: f32 = if fx.min(1.0 - fx) < width { 1.0 } else { 0.0 };
-    let gy: f32 = if fy.min(1.0 - fy) < width { 1.0 } else { 0.0 };
-    gx.max(gy)
+fn brick_topdown_mask(p: [f32; 2]) -> f32 {
+    let lx = (p[0] * 2.0).fract();
+    let ly = (p[1] * 2.0).fract();
+    let seam_x = 1.0 - smoothstep(0.0, 0.06, lx.min(1.0 - lx));
+    let seam_y = 1.0 - smoothstep(0.0, 0.06, ly.min(1.0 - ly));
+    seam_x.max(seam_y)
 }
 
 fn fbm(mut x: f32, mut y: f32, octaves: usize) -> f32 {
@@ -469,65 +419,85 @@ fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
-    use super::shaded_world;
-    use crate::model::{EffectKind, MapDocument, MaterialKind};
+    use super::*;
+    use crate::model::MaterialKind;
 
-    fn doc_from_rows(rows: &[[MaterialKind; 3]; 3]) -> MapDocument {
-        let mut doc = MapDocument::new(3, 3);
-        doc.tile_px = 32;
-        for (y, row) in rows.iter().enumerate() {
-            for (x, material) in row.iter().enumerate() {
-                let idx = doc.idx(x as u32, y as u32);
-                doc.terrain[idx] = *material;
-                doc.effects[idx] = EffectKind::None;
+    fn render_hash(doc: &MapDocument) -> u64 {
+        let w = doc.width * doc.tile_px;
+        let h = doc.height * doc.tile_px;
+        let mut hash = 1469598103934665603u64;
+        for py in 0..h {
+            for px in 0..w {
+                let world = [
+                    px as f32 / doc.tile_px as f32,
+                    py as f32 / doc.tile_px as f32,
+                ];
+                let rgb = shaded_world(doc, world);
+                for b in rgb {
+                    hash ^= b as u64;
+                    hash = hash.wrapping_mul(1099511628211);
+                }
+            }
+        }
+        hash
+    }
+
+    fn set(doc: &mut MapDocument, x: u32, y: u32, mat: MaterialKind) {
+        let idx = doc.idx(x, y);
+        doc.terrain[idx] = mat;
+    }
+
+    fn scene_l_shape() -> MapDocument {
+        let mut doc = MapDocument::new(6, 6);
+        doc.tile_px = 16;
+        for y in 1..5 {
+            set(&mut doc, 1, y, MaterialKind::Path);
+        }
+        for x in 1..5 {
+            set(&mut doc, x, 4, MaterialKind::Path);
+        }
+        doc
+    }
+
+    fn scene_checker_corners() -> MapDocument {
+        let mut doc = MapDocument::new(6, 6);
+        doc.tile_px = 16;
+        for y in 1..5 {
+            for x in 1..5 {
+                if (x + y) % 2 == 0 {
+                    set(&mut doc, x, y, MaterialKind::Wall);
+                }
             }
         }
         doc
     }
 
-    fn checksum(doc: &MapDocument) -> u64 {
-        let mut acc = 0u64;
-        for py in 0..(doc.height * doc.tile_px) {
-            for px in 0..(doc.width * doc.tile_px) {
-                let world = [
-                    px as f32 / doc.tile_px as f32,
-                    py as f32 / doc.tile_px as f32,
-                ];
-                let c = shaded_world(doc, world);
-                acc = acc
-                    .wrapping_mul(1_099_511_628_211)
-                    .wrapping_add(u64::from(c[0]))
-                    .wrapping_add(u64::from(c[1]) << 8)
-                    .wrapping_add(u64::from(c[2]) << 16);
-            }
+    fn scene_t_junction() -> MapDocument {
+        let mut doc = MapDocument::new(7, 7);
+        doc.tile_px = 16;
+        for x in 1..6 {
+            set(&mut doc, x, 2, MaterialKind::Path);
         }
-        acc
-    }
-    #[test]
-    fn diagonal_corner_fixtures_match_snapshot() {
-        let path = MaterialKind::Path;
-        let dirt = MaterialKind::Dirt;
-
-        let nw_doc = doc_from_rows(&[[dirt, dirt, path], [dirt, path, path], [path, path, path]]);
-        assert_eq!(shaded_world(&nw_doc, [1.02, 1.02]), [90, 68, 47]);
-
-        let ne_doc = doc_from_rows(&[[path, dirt, dirt], [path, path, dirt], [path, path, path]]);
-        assert_eq!(shaded_world(&ne_doc, [1.98, 1.02]), [88, 66, 46]);
-
-        let sw_doc = doc_from_rows(&[[path, path, path], [dirt, path, path], [dirt, dirt, path]]);
-        assert_eq!(shaded_world(&sw_doc, [1.02, 1.98]), [87, 66, 45]);
-
-        let se_doc = doc_from_rows(&[[path, path, path], [path, path, dirt], [path, dirt, dirt]]);
-        assert_eq!(shaded_world(&se_doc, [1.98, 1.98]), [90, 68, 47]);
+        for y in 2..6 {
+            set(&mut doc, 3, y, MaterialKind::Path);
+        }
+        doc
     }
 
     #[test]
-    fn export_parity_checksum_fixture() {
-        let g = MaterialKind::Grass;
-        let p = MaterialKind::Path;
-        let w = MaterialKind::Wall;
-        let s = MaterialKind::Sand;
-        let doc = doc_from_rows(&[[g, p, g], [w, p, s], [g, w, g]]);
-        assert_eq!(checksum(&doc), 17_084_880_885_835_417_417);
+    fn visual_regression_scene_hashes() {
+        let l_shape = render_hash(&scene_l_shape());
+        let checker = render_hash(&scene_checker_corners());
+        let t_junction = render_hash(&scene_t_junction());
+
+        assert_eq!(
+            (l_shape, checker, t_junction),
+            (
+                8947265069355207326,
+                136982776539104141,
+                11580239904059965943
+            ),
+            "visual regression hash mismatch"
+        );
     }
 }
