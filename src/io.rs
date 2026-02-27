@@ -53,57 +53,59 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
     let base_tile = [world[0].floor() as i32, world[1].floor() as i32];
     let local = [world[0].fract(), world[1].fract()];
     let mut mat = doc
-        .terrain_at_i32_checked(tile[0], tile[1])
+        .terrain_at_i32_checked(base_tile[0], base_tile[1])
         .unwrap_or(MaterialKind::Dirt);
-    let mut eff = doc.effect_at_i32(tile[0], tile[1]);
+    let mut eff = doc.effect_at_i32(base_tile[0], base_tile[1]);
     let blend = 0.2;
 
-    let mut c = material_rgb(mat, world);
-    c = apply_effect_cpu(c, eff, world);
-
     if mat.blends() {
-        let l = doc.terrain_at_i32_checked(tile[0] - 1, tile[1]);
-        let r = doc.terrain_at_i32_checked(tile[0] + 1, tile[1]);
-        let t = doc.terrain_at_i32_checked(tile[0], tile[1] - 1);
-        let b = doc.terrain_at_i32_checked(tile[0], tile[1] + 1);
+        let l = doc.terrain_at_i32_checked(base_tile[0] - 1, base_tile[1]);
+        let r = doc.terrain_at_i32_checked(base_tile[0] + 1, base_tile[1]);
+        let t = doc.terrain_at_i32_checked(base_tile[0], base_tile[1] - 1);
+        let b = doc.terrain_at_i32_checked(base_tile[0], base_tile[1] + 1);
         let wl = edge_weight(local[0], blend);
         let wr = edge_weight(1.0 - local[0], blend);
         let wt = edge_weight(local[1], blend);
         let wb = edge_weight(1.0 - local[1], blend);
 
-        let mut sum = c;
         let mut wsum = 1.0_f32;
+        let mut color_sum = material_rgb(mat, world);
+        let mut effect_sum = effect_overlay_cpu(eff, world);
         if let Some(l_mat) = l.filter(|&other| mat.blend_compatible(other)) {
-            let lc = apply_effect_cpu(
-                material_rgb(l_mat, world),
-                doc.effect_at_i32(tile[0] - 1, tile[1]),
-                world,
+            color_sum = add_weighted(color_sum, material_rgb(l_mat, world), wl);
+            effect_sum = add_weighted(
+                effect_sum,
+                effect_overlay_cpu(doc.effect_at_i32(base_tile[0] - 1, base_tile[1]), world),
+                wl,
             );
-            wsum += edge_l;
+            wsum += wl;
         }
         if let Some(r_mat) = r.filter(|&other| mat.blend_compatible(other)) {
-            let rc = apply_effect_cpu(
-                material_rgb(r_mat, world),
-                doc.effect_at_i32(tile[0] + 1, tile[1]),
-                world,
+            color_sum = add_weighted(color_sum, material_rgb(r_mat, world), wr);
+            effect_sum = add_weighted(
+                effect_sum,
+                effect_overlay_cpu(doc.effect_at_i32(base_tile[0] + 1, base_tile[1]), world),
+                wr,
             );
-            wsum += edge_r;
+            wsum += wr;
         }
         if let Some(t_mat) = t.filter(|&other| mat.blend_compatible(other)) {
-            let tc = apply_effect_cpu(
-                material_rgb(t_mat, world),
-                doc.effect_at_i32(tile[0], tile[1] - 1),
-                world,
+            color_sum = add_weighted(color_sum, material_rgb(t_mat, world), wt);
+            effect_sum = add_weighted(
+                effect_sum,
+                effect_overlay_cpu(doc.effect_at_i32(base_tile[0], base_tile[1] - 1), world),
+                wt,
             );
-            wsum += edge_t;
+            wsum += wt;
         }
         if let Some(b_mat) = b.filter(|&other| mat.blend_compatible(other)) {
-            let bc = apply_effect_cpu(
-                material_rgb(b_mat, world),
-                doc.effect_at_i32(tile[0], tile[1] + 1),
-                world,
+            color_sum = add_weighted(color_sum, material_rgb(b_mat, world), wb);
+            effect_sum = add_weighted(
+                effect_sum,
+                effect_overlay_cpu(doc.effect_at_i32(base_tile[0], base_tile[1] + 1), world),
+                wb,
             );
-            wsum += edge_b;
+            wsum += wb;
         }
 
         let mut c = [
@@ -116,11 +118,41 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
             let corner = blend * crate::blend_rules::DIAGONAL_CORNER_SCALE;
 
             if local[0] + local[1] < corner {
-                let nw = doc.terrain_at_i32_checked(tile[0] - 1, tile[1] - 1);
+                let nw = doc.terrain_at_i32_checked(base_tile[0] - 1, base_tile[1] - 1);
                 if let (Some(l_mat), Some(t_mat), Some(nw_mat)) = (l, t, nw) {
                     if l_mat == t_mat && nw_mat == l_mat && mat.blend_compatible(l_mat) {
                         mat = nw_mat;
-                        eff = doc.effect_at_i32(tile[0] - 1, tile[1] - 1);
+                        eff = doc.effect_at_i32(base_tile[0] - 1, base_tile[1] - 1);
+                        c = apply_effect_cpu(material_rgb(mat, world), eff, world);
+                    }
+                }
+            }
+            if (1.0 - local[0]) + local[1] < corner {
+                let ne = doc.terrain_at_i32_checked(base_tile[0] + 1, base_tile[1] - 1);
+                if let (Some(r_mat), Some(t_mat), Some(ne_mat)) = (r, t, ne) {
+                    if r_mat == t_mat && ne_mat == r_mat && mat.blend_compatible(r_mat) {
+                        mat = ne_mat;
+                        eff = doc.effect_at_i32(base_tile[0] + 1, base_tile[1] - 1);
+                        c = apply_effect_cpu(material_rgb(mat, world), eff, world);
+                    }
+                }
+            }
+            if local[0] + (1.0 - local[1]) < corner {
+                let sw = doc.terrain_at_i32_checked(base_tile[0] - 1, base_tile[1] + 1);
+                if let (Some(l_mat), Some(b_mat), Some(sw_mat)) = (l, b, sw) {
+                    if l_mat == b_mat && sw_mat == l_mat && mat.blend_compatible(l_mat) {
+                        mat = sw_mat;
+                        eff = doc.effect_at_i32(base_tile[0] - 1, base_tile[1] + 1);
+                        c = apply_effect_cpu(material_rgb(mat, world), eff, world);
+                    }
+                }
+            }
+            if (1.0 - local[0]) + (1.0 - local[1]) < corner {
+                let se = doc.terrain_at_i32_checked(base_tile[0] + 1, base_tile[1] + 1);
+                if let (Some(r_mat), Some(b_mat), Some(se_mat)) = (r, b, se) {
+                    if r_mat == b_mat && se_mat == r_mat && mat.blend_compatible(r_mat) {
+                        mat = se_mat;
+                        eff = doc.effect_at_i32(base_tile[0] + 1, base_tile[1] + 1);
                         c = apply_effect_cpu(material_rgb(mat, world), eff, world);
                     }
                 }
@@ -156,6 +188,10 @@ fn add_weighted(base: [f32; 3], value: [f32; 3], weight: f32) -> [f32; 3] {
 
 fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn apply_effect_cpu(base: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
+    add3(base, effect_overlay_cpu(effect, p))
 }
 
 fn effect_overlay_cpu(effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
