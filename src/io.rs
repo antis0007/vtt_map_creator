@@ -12,6 +12,7 @@ const WALL_DOOR_HEIGHT: f32 = 0.78;
 const WALL_WINDOW_WIDTH: f32 = 0.56;
 const WALL_WINDOW_HEIGHT: f32 = 0.42;
 const WALL_MULLION_THICKNESS: f32 = 0.05;
+const EFFECT_STRENGTH: f32 = 1.0;
 
 pub fn save_map(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
     let json = serde_json::to_string_pretty(doc)?;
@@ -50,7 +51,7 @@ pub fn export_png(path: impl AsRef<Path>, doc: &MapDocument) -> Result<()> {
 }
 
 fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
-    let base_tile = [world[0].floor() as i32, world[1].floor() as i32];
+    let tile = [world[0].floor() as i32, world[1].floor() as i32];
     let local = [world[0].fract(), world[1].fract()];
     let mat = doc.terrain_at_i32(tile[0], tile[1]);
     let eff = doc.effect_at_i32(tile[0], tile[1]);
@@ -65,6 +66,7 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
         let ne = doc.terrain_at_i32(tile[0] + 1, tile[1] - 1);
         let sw = doc.terrain_at_i32(tile[0] - 1, tile[1] + 1);
         let se = doc.terrain_at_i32(tile[0] + 1, tile[1] + 1);
+
         let wl = edge_weight(local[0], blend);
         let wr = edge_weight(1.0 - local[0], blend);
         let wt = edge_weight(local[1], blend);
@@ -75,6 +77,8 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
         let wse = corner_weight(1.0 - local[0], 1.0 - local[1], blend);
 
         let mut wsum = 1.0_f32;
+        let mut sum = apply_effect_cpu(material_rgb(mat, world), eff, mat, world, EFFECT_STRENGTH);
+
         let lw = if l != mat { wl } else { 0.0 };
         let rw = if r != mat { wr } else { 0.0 };
         let tw = if t != mat { wt } else { 0.0 };
@@ -87,42 +91,58 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
         let lc = apply_effect_cpu(
             material_rgb(l, world),
             doc.effect_at_i32(tile[0] - 1, tile[1]),
+            l,
             world,
+            EFFECT_STRENGTH,
         );
         let rc = apply_effect_cpu(
             material_rgb(r, world),
             doc.effect_at_i32(tile[0] + 1, tile[1]),
+            r,
             world,
+            EFFECT_STRENGTH,
         );
         let tc = apply_effect_cpu(
             material_rgb(t, world),
             doc.effect_at_i32(tile[0], tile[1] - 1),
+            t,
             world,
+            EFFECT_STRENGTH,
         );
         let bc = apply_effect_cpu(
             material_rgb(b, world),
             doc.effect_at_i32(tile[0], tile[1] + 1),
+            b,
             world,
+            EFFECT_STRENGTH,
         );
         let nwc = apply_effect_cpu(
             material_rgb(nw, world),
             doc.effect_at_i32(tile[0] - 1, tile[1] - 1),
+            nw,
             world,
+            EFFECT_STRENGTH,
         );
         let nec = apply_effect_cpu(
             material_rgb(ne, world),
             doc.effect_at_i32(tile[0] + 1, tile[1] - 1),
+            ne,
             world,
+            EFFECT_STRENGTH,
         );
         let swc = apply_effect_cpu(
             material_rgb(sw, world),
             doc.effect_at_i32(tile[0] - 1, tile[1] + 1),
+            sw,
             world,
+            EFFECT_STRENGTH,
         );
         let sec = apply_effect_cpu(
             material_rgb(se, world),
             doc.effect_at_i32(tile[0] + 1, tile[1] + 1),
+            se,
             world,
+            EFFECT_STRENGTH,
         );
 
         sum[0] += lc[0] * lw + rc[0] * rw + tc[0] * tw + bc[0] * bw;
@@ -133,7 +153,7 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
         sum[2] += nwc[2] * nww + nec[2] * neww + swc[2] * sww + sec[2] * sew;
         wsum += lw + rw + tw + bw + nww + neww + sww + sew;
 
-        c = [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum];
+        let mut c = [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum];
 
         if mat.diagonal_blend() {
             let corner = blend * 1.35;
@@ -159,42 +179,10 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
                 0.0
             };
 
-            c = mix(
-                c,
-                apply_effect_cpu(
-                    material_rgb(l, world),
-                    doc.effect_at_i32(tile[0] - 1, tile[1] - 1),
-                    world,
-                ),
-                nw_mask,
-            );
-            c = mix(
-                c,
-                apply_effect_cpu(
-                    material_rgb(r, world),
-                    doc.effect_at_i32(tile[0] + 1, tile[1] - 1),
-                    world,
-                ),
-                ne_mask,
-            );
-            c = mix(
-                c,
-                apply_effect_cpu(
-                    material_rgb(l, world),
-                    doc.effect_at_i32(tile[0] - 1, tile[1] + 1),
-                    world,
-                ),
-                sw_mask,
-            );
-            c = mix(
-                c,
-                apply_effect_cpu(
-                    material_rgb(r, world),
-                    doc.effect_at_i32(tile[0] + 1, tile[1] + 1),
-                    world,
-                ),
-                se_mask,
-            );
+            c = mix(c, nwc, nw_mask);
+            c = mix(c, nec, ne_mask);
+            c = mix(c, swc, sw_mask);
+            c = mix(c, sec, se_mask);
         }
 
         return [
@@ -204,7 +192,7 @@ fn shaded_world(doc: &MapDocument, world: [f32; 2]) -> [u8; 3] {
         ];
     }
 
-    let c = add3(material_rgb(mat, world), effect_overlay_cpu(eff, world));
+    let c = apply_effect_cpu(material_rgb(mat, world), eff, mat, world, EFFECT_STRENGTH);
     [
         c[0].clamp(0.0, 255.0) as u8,
         c[1].clamp(0.0, 255.0) as u8,
@@ -221,23 +209,45 @@ fn corner_weight(dx: f32, dy: f32, blend: f32) -> f32 {
     1.0 - smoothstep(0.0, radius, (dx * dx + dy * dy).sqrt())
 }
 
-fn apply_effect_cpu(mut c: [f32; 3], effect: EffectKind, p: [f32; 2]) -> [f32; 3] {
+fn apply_effect_cpu(
+    base: [f32; 3],
+    effect: EffectKind,
+    material: MaterialKind,
+    p: [f32; 2],
+    strength: f32,
+) -> [f32; 3] {
+    let mut c = base;
+    let s = strength.clamp(0.0, 2.0);
     match effect {
-        EffectKind::None => [0.0, 0.0, 0.0],
+        EffectKind::None => c,
         EffectKind::Wind => {
-            let gust =
-                0.5 + 0.5 * (p[0] * 4.0 + p[1] * 1.5 + fbm(p[0] * 1.5, p[1] * 1.5, 5) * 4.0).sin();
-            c[0] += 7.65 * gust;
-            c[1] += 20.4 * gust;
-            c[2] += 5.1 * gust;
+            if !material.is_foliage() {
+                return c;
+            }
+            let flow = vec_noise2([p[0] * 0.35 + 3.1, p[1] * 0.35 - 2.4], 0.0);
+            let turb = fbm(p[0] * 1.4 + 11.0, p[1] * 1.4 - 7.0, 4);
+            let gust = (flow[0] * 0.75 + flow[1] * 0.45 + turb * 0.35).clamp(0.0, 1.0);
+            let shade = 0.94 + gust * 0.16 * s;
+            c[0] *= shade * 0.995;
+            c[1] *= shade;
+            c[2] *= shade * 0.99;
             c
         }
         EffectKind::Rain => {
-            let streak = ((p[0] * 14.0 + p[1] * 32.0).fract() * 2.0 - 1.0).abs();
-            let band = 1.0 - smoothstep(0.72, 0.96, streak);
-            c[0] += 20.4 * band;
-            c[1] += 22.95 * band;
-            c[2] += 33.15 * band;
+            let t = 0.0;
+            let streak1 = rain_streak(p, [0.52, -1.35], 8.0 + t * 0.7, 22.0, 0.18);
+            let streak2 = rain_streak(p, [0.16, -1.0], -4.0 + t * 1.2, 34.0, 0.12);
+            let streak3 = rain_streak(p, [0.73, -1.7], 13.0 + t * 1.7, 48.0, 0.09);
+            let streaks = (streak1 * 0.5 + streak2 * 0.32 + streak3 * 0.22).clamp(0.0, 1.0);
+            let drops = rain_drops(p, 9.5, 0.22) * 0.35 + rain_drops(p, 17.0, 0.13) * 0.20;
+            let wet = (streaks + drops).clamp(0.0, 1.0) * s;
+            let lum = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+            c = mix(c, [lum, lum, lum], wet * 0.12);
+            let darken = 1.0 - wet * 0.18;
+            c[0] *= darken;
+            c[1] *= darken;
+            c[2] *= darken;
+            c[2] += wet * 8.0;
             c
         }
     }
@@ -248,15 +258,38 @@ fn material_rgb(mat: MaterialKind, p: [f32; 2]) -> [f32; 3] {
     let n2 = fbm(p[0] * 6.2 + 17.0, p[1] * 6.2 - 9.0, 5);
     match mat {
         MaterialKind::Dirt => tint([102.0, 76.5, 53.55], 0.76 + n1 * 0.18 + n2 * 0.06),
-        MaterialKind::Grass => {
-            let bands = 0.5 + 0.5 * (p[0] * 14.0 + fbm(p[0] * 2.5, p[1] * 2.5, 5) * 3.0).sin();
-            let blades = 0.5 + 0.5 * (p[0] * 16.0 + p[1] * 3.0 + n2 * 5.0).sin();
-            let mut c = tint(
-                [76.5, 127.5, 58.65],
-                0.72 + n1 * 0.12 + bands * 0.10 + blades * 0.08,
+        MaterialKind::Grass | MaterialKind::HighGrass | MaterialKind::Bushes => {
+            let foliage_mode = match mat {
+                MaterialKind::Grass => [1.0, 0.72, 0.10, 0.08],
+                MaterialKind::HighGrass => [1.25, 0.66, 0.13, 0.11],
+                MaterialKind::Bushes => [0.7, 0.62, 0.18, 0.14],
+                _ => unreachable!(),
+            };
+            let sway_vec = vec_noise2([p[0] * 0.48 + 2.0, p[1] * 0.48 - 5.0], 0.0);
+            let orient = p[0] * (12.0 + foliage_mode[0] * 2.6)
+                + p[1] * (2.0 + foliage_mode[0])
+                + sway_vec[0] * 3.4
+                + sway_vec[1] * 2.8;
+            let blades = 0.5 + 0.5 * (orient + n2 * (4.2 + foliage_mode[0])).sin();
+            let cluster = fbm(
+                p[0] * (3.8 + foliage_mode[0]),
+                p[1] * (3.4 + foliage_mode[0]),
+                5,
             );
-            c[0] += 2.55;
-            c[1] += 7.65;
+            let detail = fbm(p[0] * 11.0 + 4.0, p[1] * 11.0 - 3.0, 3);
+            let tint_strength =
+                foliage_mode[1] + n1 * 0.14 + blades * foliage_mode[2] + cluster * foliage_mode[3];
+            let mut c = match mat {
+                MaterialKind::Grass => tint([76.5, 127.5, 58.65], tint_strength),
+                MaterialKind::HighGrass => tint([66.3, 114.75, 52.53], tint_strength),
+                MaterialKind::Bushes => tint([53.55, 99.45, 45.9], tint_strength),
+                _ => unreachable!(),
+            };
+            c = mix(
+                c,
+                [c[0] * 0.88, c[1] * 1.08, c[2] * 0.9],
+                (detail * 0.5 + 0.5) * 0.25,
+            );
             c
         }
         MaterialKind::Sand => {
@@ -355,6 +388,42 @@ fn brick_topdown_mask(p: [f32; 2]) -> f32 {
     let seam_x = 1.0 - smoothstep(0.0, 0.06, lx.min(1.0 - lx));
     let seam_y = 1.0 - smoothstep(0.0, 0.06, ly.min(1.0 - ly));
     seam_x.max(seam_y)
+}
+
+fn rain_streak(p: [f32; 2], dir: [f32; 2], phase: f32, freq: f32, width: f32) -> f32 {
+    let d = [dir[0], dir[1]];
+    let n = (d[0] * d[0] + d[1] * d[1]).sqrt().max(0.0001);
+    let dir_n = [d[0] / n, d[1] / n];
+    let orth = [-dir_n[1], dir_n[0]];
+    let u = p[0] * orth[0] + p[1] * orth[1];
+    let v = p[0] * dir_n[0] + p[1] * dir_n[1];
+    let jitter = fbm(p[0] * 2.8 + phase, p[1] * 2.8 - phase, 3) * 0.35;
+    let lane = ((u + phase + jitter) * freq).fract();
+    let core = 1.0 - smoothstep(0.5 - width, 0.5 + width, (lane - 0.5).abs());
+    let length = 0.5 + 0.5 * ((v * 9.0 + phase * 3.0).sin());
+    core * (0.45 + length * 0.55)
+}
+
+fn rain_drops(p: [f32; 2], grid: f32, threshold: f32) -> f32 {
+    let cx = (p[0] * grid).floor() as i32;
+    let cy = (p[1] * grid).floor() as i32;
+    let seed = hash2(cx, cy, 77);
+    if seed < 1.0 - threshold {
+        return 0.0;
+    }
+    let local = [(p[0] * grid).fract() - 0.5, (p[1] * grid).fract() - 0.5];
+    let r = (local[0] * local[0] + local[1] * local[1]).sqrt();
+    (1.0 - smoothstep(0.12, 0.42, r)) * ((seed - (1.0 - threshold)) / threshold)
+}
+
+fn vec_noise2(p: [f32; 2], time: f32) -> [f32; 2] {
+    let a = fbm(p[0] + time * 0.21, p[1] - time * 0.17, 4);
+    let b = fbm(
+        p[0] * 1.07 - 13.4 - time * 0.16,
+        p[1] * 1.07 + 9.1 + time * 0.2,
+        4,
+    );
+    [a * 2.0 - 1.0, b * 2.0 - 1.0]
 }
 
 fn fbm(mut x: f32, mut y: f32, octaves: usize) -> f32 {
@@ -493,9 +562,9 @@ mod tests {
         assert_eq!(
             (l_shape, checker, t_junction),
             (
-                8947265069355207326,
-                136982776539104141,
-                11580239904059965943
+                18169167627870801988,
+                3315233604627875452,
+                7490973748885000186
             ),
             "visual regression hash mismatch"
         );
