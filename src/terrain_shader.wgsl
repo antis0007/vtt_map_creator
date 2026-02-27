@@ -20,6 +20,16 @@ struct VsOut {
     @location(0) uv: vec2<f32>,
 };
 
+const WALL_BLOCK_COLS: f32 = 3.0;
+const WALL_BLOCK_ROWS: f32 = 2.0;
+const WALL_SEAM_WIDTH: f32 = 0.06;
+const WALL_FRAME_THICKNESS: f32 = 0.10;
+const WALL_DOOR_WIDTH: f32 = 0.46;
+const WALL_DOOR_HEIGHT: f32 = 0.78;
+const WALL_WINDOW_WIDTH: f32 = 0.56;
+const WALL_WINDOW_HEIGHT: f32 = 0.42;
+const WALL_MULLION_THICKNESS: f32 = 0.05;
+
 fn unpack_material(packed: u32) -> u32 {
     return packed & 0xffu;
 }
@@ -93,6 +103,22 @@ fn stone_block_mask(p: vec2<f32>) -> f32 {
     return max(seam_x, seam_y);
 }
 
+fn rect_mask(p: vec2<f32>, min_p: vec2<f32>, max_p: vec2<f32>) -> f32 {
+    let left = step(min_p.x, p.x);
+    let right = step(p.x, max_p.x);
+    let top = step(min_p.y, p.y);
+    let bottom = step(p.y, max_p.y);
+    return left * right * top * bottom;
+}
+
+fn wall_block_mask(tile_local: vec2<f32>) -> f32 {
+    let grid = tile_local * vec2<f32>(WALL_BLOCK_COLS, WALL_BLOCK_ROWS);
+    let cell_local = fract(grid);
+    let seam_x = 1.0 - smoothstep(0.0, WALL_SEAM_WIDTH, min(cell_local.x, 1.0 - cell_local.x));
+    let seam_y = 1.0 - smoothstep(0.0, WALL_SEAM_WIDTH, min(cell_local.y, 1.0 - cell_local.y));
+    return max(seam_x, seam_y);
+}
+
 fn brick_topdown_mask(p: vec2<f32>) -> f32 {
     let cell = p * vec2<f32>(2.0, 2.0);
     let local = fract(cell);
@@ -104,6 +130,9 @@ fn brick_topdown_mask(p: vec2<f32>) -> f32 {
 }
 
 fn material_color(material: u32, world: vec2<f32>) -> vec3<f32> {
+    let tile_local = fract(world);
+    let block_grid = tile_local * vec2<f32>(WALL_BLOCK_COLS, WALL_BLOCK_ROWS);
+    let block_id = floor(block_grid);
     let n1 = fbm(world * 2.6);
     let n2 = fbm(world * 6.2 + vec2<f32>(17.0, -9.0));
 
@@ -149,22 +178,60 @@ fn material_color(material: u32, world: vec2<f32>) -> vec3<f32> {
         return vec3<f32>(0.50, 0.43, 0.33) * (0.86 + n1 * 0.08 + chips * 0.08);
     }
     if (material == 8u) {
-        let seam = stone_block_mask(world + vec2<f32>(n1 * 0.04, n2 * 0.04));
-        let stone = vec3<f32>(0.54, 0.57, 0.60) * (0.84 + n1 * 0.10);
+        let seam = wall_block_mask(tile_local);
+        let block_seed = hash21(floor(world) * 11.0 + block_id * 3.0);
+        let block_light = 0.82 + n1 * 0.10 + (block_seed - 0.5) * 0.10;
+        let stone = vec3<f32>(0.54, 0.57, 0.60) * block_light;
         let mortar = vec3<f32>(0.37, 0.38, 0.39);
         return mix(stone, mortar, seam * 0.95);
     }
     if (material == 9u) {
-        let frame = stone_block_mask(world);
-        let wood = vec3<f32>(0.44, 0.30, 0.17) * (0.9 + n1 * 0.08);
-        let trim = vec3<f32>(0.58, 0.60, 0.62);
-        return mix(wood, trim, frame * 0.8);
+        let seam = wall_block_mask(tile_local);
+        let stone = vec3<f32>(0.53, 0.56, 0.60) * (0.82 + n1 * 0.09);
+        let mortar = vec3<f32>(0.36, 0.37, 0.39);
+        let wall = mix(stone, mortar, seam * 0.9);
+
+        let opening_min = vec2<f32>(0.5 - WALL_DOOR_WIDTH * 0.5, 1.0 - WALL_DOOR_HEIGHT + WALL_FRAME_THICKNESS);
+        let opening_max = vec2<f32>(0.5 + WALL_DOOR_WIDTH * 0.5, 1.0 - WALL_FRAME_THICKNESS);
+        let frame_min = vec2<f32>(opening_min.x - WALL_FRAME_THICKNESS, opening_min.y - WALL_FRAME_THICKNESS);
+        let frame_max = vec2<f32>(opening_max.x + WALL_FRAME_THICKNESS, 1.0);
+
+        let opening = rect_mask(tile_local, opening_min, opening_max);
+        let frame = max(0.0, rect_mask(tile_local, frame_min, frame_max) - opening);
+        let door_wood = vec3<f32>(0.25, 0.15, 0.08) * (0.78 + n2 * 0.12);
+        let trim = vec3<f32>(0.63, 0.66, 0.69);
+        let with_frame = mix(wall, trim, frame);
+        return mix(with_frame, door_wood, opening);
     }
     if (material == 10u) {
-        let frame = stone_block_mask(world);
-        let glass = vec3<f32>(0.36, 0.50, 0.63) * (0.9 + n1 * 0.10);
-        let trim = vec3<f32>(0.62, 0.65, 0.67);
-        return mix(glass, trim, frame * 0.85);
+        let seam = wall_block_mask(tile_local);
+        let stone = vec3<f32>(0.53, 0.56, 0.60) * (0.84 + n1 * 0.08);
+        let mortar = vec3<f32>(0.36, 0.37, 0.39);
+        let wall = mix(stone, mortar, seam * 0.9);
+
+        let outer_min = vec2<f32>(0.5 - WALL_WINDOW_WIDTH * 0.5, 0.36 - WALL_WINDOW_HEIGHT * 0.5);
+        let outer_max = vec2<f32>(0.5 + WALL_WINDOW_WIDTH * 0.5, 0.36 + WALL_WINDOW_HEIGHT * 0.5);
+        let inner_min = outer_min + vec2<f32>(WALL_FRAME_THICKNESS, WALL_FRAME_THICKNESS);
+        let inner_max = outer_max - vec2<f32>(WALL_FRAME_THICKNESS, WALL_FRAME_THICKNESS);
+        let window_outer = rect_mask(tile_local, outer_min, outer_max);
+        let glass_area = rect_mask(tile_local, inner_min, inner_max);
+        let frame = max(0.0, window_outer - glass_area);
+
+        let inner_size = inner_max - inner_min;
+        let v_mid = inner_min.x + inner_size.x * 0.5;
+        let h_mid = inner_min.y + inner_size.y * 0.5;
+        let v_bar = rect_mask(tile_local, vec2<f32>(v_mid - WALL_MULLION_THICKNESS, inner_min.y), vec2<f32>(v_mid + WALL_MULLION_THICKNESS, inner_max.y));
+        let h_bar = rect_mask(tile_local, vec2<f32>(inner_min.x, h_mid - WALL_MULLION_THICKNESS), vec2<f32>(inner_max.x, h_mid + WALL_MULLION_THICKNESS));
+        let mullion = max(v_bar, h_bar) * glass_area;
+
+        let pane_variation = hash21(floor(world) * 7.0 + block_id);
+        let glass = vec3<f32>(0.33, 0.50, 0.66) * (0.84 + pane_variation * 0.16);
+        let highlight = rect_mask(tile_local, inner_min + vec2<f32>(0.03, 0.03), inner_min + vec2<f32>(inner_size.x * 0.35, inner_size.y * 0.26)) * glass_area;
+        let trim = vec3<f32>(0.66, 0.69, 0.72);
+        var color = mix(wall, trim, frame);
+        color = mix(color, glass, glass_area);
+        color = mix(color, trim * 0.95, mullion);
+        return color + vec3<f32>(0.12, 0.14, 0.16) * highlight;
     }
 
     let seam = plank_mask(world + vec2<f32>(n2 * 0.03, 0.0));
